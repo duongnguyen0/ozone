@@ -316,8 +316,7 @@ public class ObjectEndpoint extends EndpointBase {
 
       if (rangeHeaderVal == null || rangeHeader.isReadFull()) {
         StreamingOutput output = dest -> {
-          try (OzoneInputStream key = getClientProtocol().getKey(
-              volume.getName(), bucketName, keyPath)) {
+          try (OzoneInputStream key = keyDetails.getContent()) {
             IOUtils.copy(key, dest);
           }
         };
@@ -333,8 +332,7 @@ public class ObjectEndpoint extends EndpointBase {
         // byte from start offset
         long copyLength = endOffset - startOffset + 1;
         StreamingOutput output = dest -> {
-          try (OzoneInputStream ozoneInputStream = getClientProtocol().getKey(
-              volume.getName(), bucketName, keyPath)) {
+          try (OzoneInputStream ozoneInputStream = keyDetails.getContent()) {
             ozoneInputStream.seek(startOffset);
             IOUtils.copyLarge(ozoneInputStream, dest, 0,
                 copyLength, new byte[bufferSize]);
@@ -730,8 +728,9 @@ public class ObjectEndpoint extends EndpointBase {
           String sourceBucket = result.getLeft();
           String sourceKey = result.getRight();
 
-          Long sourceKeyModificationTime = getClientProtocol().getKeyDetails(
-              volume.getName(), sourceBucket, sourceKey)
+          OzoneKeyDetails sourceKeyDetails = getClientProtocol().getKeyDetails(
+              volume.getName(), sourceBucket, sourceKey);
+          Long sourceKeyModificationTime = sourceKeyDetails
               .getModificationTime().toEpochMilli();
           String copySourceIfModifiedSince =
               headers.getHeaderString(COPY_SOURCE_IF_MODIFIED_SINCE);
@@ -742,8 +741,7 @@ public class ObjectEndpoint extends EndpointBase {
             throw newError(PRECOND_FAILED, sourceBucket + "/" + sourceKey);
           }
 
-          try (OzoneInputStream sourceObject = getClientProtocol().getKey(
-              volume.getName(), sourceBucket, sourceKey)) {
+          try (OzoneInputStream sourceObject = sourceKeyDetails.getContent()) {
 
             String range =
                 headers.getHeaderString(COPY_SOURCE_HEADER_RANGE);
