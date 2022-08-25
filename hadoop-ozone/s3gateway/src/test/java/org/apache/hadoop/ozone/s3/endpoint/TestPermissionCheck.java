@@ -257,7 +257,7 @@ public class TestPermissionCheck {
     Mockito.when(objectStore.getS3Volume()).thenReturn(volume);
     Mockito.when(client.getProxy()).thenReturn(clientProtocol);
     doThrow(exception).when(clientProtocol)
-        .getKeyDetails(anyString(), anyString(), anyString());
+        .getS3KeyDetails(anyString(), anyString());
     ObjectEndpoint objectEndpoint = new ObjectEndpoint();
     objectEndpoint.setClient(client);
     objectEndpoint.setHeaders(headers);

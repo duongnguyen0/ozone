@@ -1397,6 +1397,23 @@ public class RpcClient implements ClientProtocol {
   }
 
   @Override
+  public OzoneKeyDetails getS3KeyDetails(String bucketName,
+                                         String keyName) throws IOException {
+    Preconditions.checkNotNull(bucketName);
+    Preconditions.checkNotNull(keyName);
+    OmKeyArgs keyArgs = new OmKeyArgs.Builder()
+        .setS3Context(true)
+        .setVolumeName("s3volume") //Dummy string, will be ignored by OM.
+        .setBucketName(bucketName)
+        .setKeyName(keyName)
+        .setRefreshPipeline(true)
+        .setSortDatanodesInPipeline(topologyAwareReadEnabled)
+        .setLatestVersionLocation(getLatestVersionLocation)
+        .build();
+    return getKeyDetails(keyArgs);
+  }
+
+  @Override
   public OzoneKeyDetails getKeyDetails(
       String volumeName, String bucketName, String keyName)
       throws IOException {
@@ -1411,6 +1428,12 @@ public class RpcClient implements ClientProtocol {
         .setSortDatanodesInPipeline(topologyAwareReadEnabled)
         .setLatestVersionLocation(getLatestVersionLocation)
         .build();
+    return getKeyDetails(keyArgs);
+  }
+
+  @NotNull
+  private OzoneKeyDetails getKeyDetails(OmKeyArgs keyArgs)
+      throws IOException {
     OmKeyInfo keyInfo = ozoneManagerClient.lookupKey(keyArgs);
 
     List<OzoneKeyLocation> ozoneKeyLocations = new ArrayList<>();

@@ -430,6 +430,10 @@ public interface ClientProtocol {
                                 String keyName)
       throws IOException;
 
+  OzoneKeyDetails getS3KeyDetails(String bucketName,
+                                String keyName)
+      throws IOException;
+
   /**
    * Close and release the resources.
    */

@@ -780,6 +780,7 @@ public final class OzoneManagerProtocolClientSideTranslatorPB
     LookupKeyRequest.Builder req = LookupKeyRequest.newBuilder();
     KeyArgs keyArgs = KeyArgs.newBuilder()
         .setVolumeName(args.getVolumeName())
+        .setS3Context(args.isS3Context())
         .setBucketName(args.getBucketName())
         .setKeyName(args.getKeyName())
         .setDataSize(args.getDataSize())

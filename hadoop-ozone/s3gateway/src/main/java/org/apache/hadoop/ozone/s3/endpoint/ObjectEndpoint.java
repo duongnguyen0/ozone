@@ -290,10 +290,8 @@ public class ObjectEndpoint extends EndpointBase {
             partMarker, maxParts);
       }
 
-      OzoneVolume volume = getVolume();
-
-      OzoneKeyDetails keyDetails = getClientProtocol().getKeyDetails(
-          volume.getName(), bucketName, keyPath);
+      OzoneKeyDetails keyDetails = getClientProtocol().getS3KeyDetails(
+          bucketName, keyPath);
 
       long length = keyDetails.getDataSize();
 

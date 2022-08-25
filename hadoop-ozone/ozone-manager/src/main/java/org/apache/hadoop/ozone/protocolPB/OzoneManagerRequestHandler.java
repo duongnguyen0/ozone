@@ -485,6 +485,7 @@ public class OzoneManagerRequestHandler implements RequestHandler {
         LookupKeyResponse.newBuilder();
     KeyArgs keyArgs = request.getKeyArgs();
     OmKeyArgs omKeyArgs = new OmKeyArgs.Builder()
+        .setS3Context(keyArgs.getS3Context())
         .setVolumeName(keyArgs.getVolumeName())
         .setBucketName(keyArgs.getBucketName())
         .setKeyName(keyArgs.getKeyName())

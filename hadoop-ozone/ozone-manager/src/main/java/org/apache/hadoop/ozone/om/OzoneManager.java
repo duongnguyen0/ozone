@@ -2803,6 +2803,11 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
    */
   @Override
   public OmKeyInfo lookupKey(OmKeyArgs args) throws IOException {
+    if (args.isS3Context()) {
+      S3VolumeContext s3VolumeContext = getS3VolumeContext();
+      args = args.toBuilder().setVolumeName(
+          s3VolumeContext.getOmVolumeArgs().getVolume()).build();
+    }
     ResolvedBucket bucket = resolveBucketLink(args);
 
     if (isAclEnabled) {

@@ -867,6 +867,7 @@ message KeyArgs {
     // When it is a head operation which is to check whether key exist
     optional bool headOp = 18;
     optional hadoop.hdds.ECReplicationConfig ecReplicationConfig = 19;
+    optional bool s3Context = 20;
 }
 
 message KeyLocation {
