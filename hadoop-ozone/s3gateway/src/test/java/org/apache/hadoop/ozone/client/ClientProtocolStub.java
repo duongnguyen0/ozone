@@ -550,6 +550,13 @@ public class ClientProtocolStub implements ClientProtocol {
   }
 
   @Override
+  public OzoneKey headS3Object(String bucketName, String keyName)
+      throws IOException {
+    return objectStoreStub.getS3Volume().getBucket(bucketName)
+        .headObject(keyName);
+  }
+
+  @Override
   public void setThreadLocalS3Auth(S3Auth s3Auth) {
 
   }

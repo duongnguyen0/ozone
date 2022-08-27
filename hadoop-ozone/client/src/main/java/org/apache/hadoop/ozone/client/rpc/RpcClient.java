@@ -2025,7 +2025,26 @@ public class RpcClient implements ClientProtocol {
     return new OzoneKey(keyInfo.getVolumeName(), keyInfo.getBucketName(),
         keyInfo.getKeyName(), keyInfo.getDataSize(), keyInfo.getCreationTime(),
         keyInfo.getModificationTime(), keyInfo.getReplicationConfig());
+  }
 
+  @Override
+  public OzoneKey headS3Object(String bucketName,
+                               String keyName) throws IOException {
+    verifyBucketName(bucketName);
+    Preconditions.checkNotNull(keyName);
+    OmKeyArgs keyArgs = new OmKeyArgs.Builder()
+        .setVolumeName("s3") // ignore
+        .setS3Context(true)
+        .setBucketName(bucketName)
+        .setKeyName(keyName)
+        .setLatestVersionLocation(true)
+        .setHeadOp(true)
+        .build();
+    OmKeyInfo keyInfo = ozoneManagerClient.lookupKey(keyArgs);
+
+    return new OzoneKey(keyInfo.getVolumeName(), keyInfo.getBucketName(),
+        keyInfo.getKeyName(), keyInfo.getDataSize(), keyInfo.getCreationTime(),
+        keyInfo.getModificationTime(), keyInfo.getReplicationConfig());
   }
 
   @Override

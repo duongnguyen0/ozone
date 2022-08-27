@@ -919,6 +919,10 @@ public interface ClientProtocol {
   OzoneKey headObject(String volumeName, String bucketName,
       String keyName) throws IOException;
 
+  OzoneKey headS3Object(String bucketName,
+                      String keyName) throws IOException;
+
+
   /**
    * Sets the S3 Authentication information for the requests executed on behalf
    * of the S3 API implementation within Ozone.
