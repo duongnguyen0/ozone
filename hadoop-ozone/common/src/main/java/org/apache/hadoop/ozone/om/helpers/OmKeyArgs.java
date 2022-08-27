@@ -196,7 +196,9 @@ public final class OmKeyArgs implements Auditable {
         .setRefreshPipeline(refreshPipeline)
         .setSortDatanodesInPipeline(sortDatanodesInPipeline)
         .setLatestVersionLocation(latestVersionLocation)
-        .setAcls(acls);
+        .setAcls(acls)
+        .setS3Context(s3Context)
+        .setHeadOp(headOp);
   }
 
   /**
