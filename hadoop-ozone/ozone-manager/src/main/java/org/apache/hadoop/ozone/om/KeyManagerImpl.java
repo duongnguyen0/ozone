@@ -380,6 +380,7 @@ public class KeyManagerImpl implements KeyManager {
       slimLocationVersion(value);
     }
 
+    refresh(value);
     // If operation is head, do not perform any additional steps based on flags.
     // As head operation does not need any of those details.
     if (!args.isHeadOp()) {
@@ -390,7 +391,6 @@ public class KeyManagerImpl implements KeyManager {
       // Refresh container pipeline info from SCM
       // based on OmKeyArgs.refreshPipeline flag
       // value won't be null as the check is done inside try/catch block.
-      refresh(value);
 
       if (args.getSortDatanodes()) {
         sortDatanodes(clientAddress, value);
@@ -470,8 +470,8 @@ public class KeyManagerImpl implements KeyManager {
       }
     }
 
-    Map<Long, ContainerWithPipeline> containerWithPipelineMap =
-        refreshPipeline(containerIDs);
+    Map<Long, Pipeline> pipelineMap =
+        scmClient.getContainerLocations(containerIDs);
 
     for (OmKeyInfo keyInfo : keyList) {
       List<OmKeyLocationInfoGroup> locationInfoGroups =
@@ -480,11 +480,10 @@ public class KeyManagerImpl implements KeyManager {
         for (List<OmKeyLocationInfo> omKeyLocationInfoList :
             key.getLocationLists()) {
           for (OmKeyLocationInfo omKeyLocationInfo : omKeyLocationInfoList) {
-            ContainerWithPipeline cp = containerWithPipelineMap.get(
+            Pipeline p = pipelineMap.get(
                 omKeyLocationInfo.getContainerID());
-            if (cp != null &&
-                !cp.getPipeline().equals(omKeyLocationInfo.getPipeline())) {
-              omKeyLocationInfo.setPipeline(cp.getPipeline());
+            if (p != null && !p.equals(omKeyLocationInfo.getPipeline())) {
+              omKeyLocationInfo.setPipeline(p);
             }
           }
         }
