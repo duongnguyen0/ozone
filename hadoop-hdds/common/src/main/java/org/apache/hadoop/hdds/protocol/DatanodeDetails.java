@@ -802,7 +802,7 @@ public class DatanodeDetails extends NodeImpl implements
      * @param name
      * @param value
      */
-    private Port(Name name, Integer value) {
+    public Port(Name name, Integer value) {
       this.name = name;
       this.value = value;
     }
