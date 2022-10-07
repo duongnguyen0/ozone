@@ -17,10 +17,12 @@
 
 package org.apache.hadoop.ozone.om;
 
+import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
+import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.scm.container.common.helpers.ContainerWithPipeline;
 import org.apache.hadoop.hdds.scm.pipeline.Pipeline;
 import org.apache.hadoop.hdds.scm.protocol.ScmBlockLocationProtocol;
@@ -29,7 +31,10 @@ import org.apache.hadoop.hdds.scm.update.client.SCMUpdateServiceGrpcClient;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -46,7 +51,9 @@ public class ScmClient {
 
   private final ScmBlockLocationProtocol blockClient;
   private final StorageContainerLocationProtocol containerClient;
-  private final LoadingCache<Long, Pipeline> containerLocationCache;
+  private final LoadingCache<Long, CachedPipeline> containerLocationCache;
+  private final Cache<UUID, DatanodeDetails> datanodeCache;
+
   private SCMUpdateServiceGrpcClient updateServiceGrpcClient;
 
   ScmClient(ScmBlockLocationProtocol blockClient,
@@ -54,13 +61,16 @@ public class ScmClient {
             OzoneConfiguration configuration) {
     this.containerClient = containerClient;
     this.blockClient = blockClient;
+    // todo: to be solved, eviction policy.
+    this.datanodeCache = CacheBuilder.newBuilder().build();
     this.containerLocationCache =
-        createContainerLocationCache(configuration, containerClient);
+        createContainerLocationCache(configuration, containerClient, datanodeCache);
   }
 
-  static LoadingCache<Long, Pipeline> createContainerLocationCache(
-      OzoneConfiguration configuration,
-      StorageContainerLocationProtocol containerClient) {
+  private static LoadingCache<Long, CachedPipeline> createContainerLocationCache(
+      final OzoneConfiguration configuration,
+      final StorageContainerLocationProtocol containerClient,
+      final Cache<UUID, DatanodeDetails> datanodeCache) {
     int maxSize = configuration.getInt(OZONE_OM_CONTAINER_LOCATION_CACHE_SIZE,
         OZONE_OM_CONTAINER_LOCATION_CACHE_SIZE_DEFAULT);
     TimeUnit unit =  OZONE_OM_CONTAINER_LOCATION_CACHE_TTL_DEFAULT.getUnit();
@@ -70,22 +80,31 @@ public class ScmClient {
     return CacheBuilder.newBuilder()
         .maximumSize(maxSize)
         .expireAfterWrite(ttl, unit)
-        .build(new CacheLoader<Long, Pipeline>() {
+        .build(new CacheLoader<Long, CachedPipeline>() {
           @NotNull
           @Override
-          public Pipeline load(@NotNull Long key) throws Exception {
-            return containerClient.getContainerWithPipeline(key).getPipeline();
+          public CachedPipeline load(@NotNull Long key) throws Exception {
+            Pipeline p =
+                containerClient.getContainerWithPipeline(key).getPipeline();
+            collectDatanodes(p);
+            return new CachedPipeline(p);
+          }
+
+          private void collectDatanodes(Pipeline p) {
+            p.getNodes().forEach(x -> datanodeCache.put(x.getUuid(), x));
           }
 
           @NotNull
           @Override
-          public Map<Long, Pipeline> loadAll(
+          public Map<Long, CachedPipeline> loadAll(
               @NotNull Iterable<? extends Long> keys) throws Exception {
-            return containerClient.getContainerWithPipelineBatch(keys)
-                .stream()
+            List<ContainerWithPipeline> pipelines =
+                containerClient.getContainerWithPipelineBatch(keys);
+            pipelines.forEach(x -> collectDatanodes(x.getPipeline()));
+            return pipelines.stream()
                 .collect(Collectors.toMap(
                     x -> x.getContainerInfo().getContainerID(),
-                    ContainerWithPipeline::getPipeline
+                    x -> new CachedPipeline(x.getPipeline())
                 ));
           }
         });
@@ -115,7 +134,13 @@ public class ScmClient {
       containerLocationCache.invalidateAll(containerIds);
     }
     try {
-      return containerLocationCache.getAll(containerIds);
+      Map<Long, CachedPipeline> all =
+          containerLocationCache.getAll(containerIds);
+      Map<Long, Pipeline> result = new LinkedHashMap<>();
+      for (Map.Entry<Long, CachedPipeline> entry : all.entrySet()) {
+        Pipeline p = entry.getValue().toPipeline(datanodeCache::getIfPresent);
+      }
+      return result;
     } catch (ExecutionException e) {
       return handleCacheExecutionException(e);
     }
@@ -129,6 +154,4 @@ public class ScmClient {
     throw new IllegalStateException("Unexpected exception accessing " +
         "container location", e.getCause());
   }
-
-
 }
