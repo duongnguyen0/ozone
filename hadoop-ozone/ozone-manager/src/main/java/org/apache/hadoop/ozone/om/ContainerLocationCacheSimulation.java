@@ -39,12 +39,14 @@ import org.apache.hadoop.ozone.upgrade.UpgradeFinalizer;
 import org.apache.hadoop.security.token.Token;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Random;
 import java.util.UUID;
-import java.util.stream.Collectors;
-import java.util.stream.StreamSupport;
 
 import static java.util.Arrays.asList;
 import static org.apache.commons.lang.RandomStringUtils.randomAlphabetic;
@@ -62,22 +64,45 @@ import static org.apache.hadoop.hdds.protocol.proto.HddsProtos.NodeOperationalSt
  * This allows external analysis to explore the cache memory footprint.
  */
 public class ContainerLocationCacheSimulation {
+  private static DatanodeDetails randomDatanode() {
+    return DatanodeDetails.newBuilder()
+        .setUuid(UUID.randomUUID())
+        .setHostName(randomAlphabetic(50))
+        .setIpAddress(randomAlphabetic(15)) // IPV4 (xxx.xxx.xxx.xxx)
+        .addPort(new Port(RATIS, 1024))
+        .addPort(new Port(STANDALONE, 1025))
+        .addPort(new Port(REST, 1026))
+        .addPort(new Port(REPLICATION, 1025))
+        .setNetworkName(randomAlphabetic(20))
+        .setNetworkLocation("/" + randomAlphabetic(19))
+        .setPersistedOpState(IN_SERVICE)
+        .build();
+  }
+
   private static ScmClient scmClient;
   public static void main(String[] args) throws IOException {
+    int numberOfDataNodes = 10_000;
     MockStorageContainerLocationProtocol mockLocationProtocol =
-        new MockStorageContainerLocationProtocol();
+        new MockStorageContainerLocationProtocol(numberOfDataNodes);
     int numberOfItems = 1000_000;
 
     OzoneConfiguration conf = new OzoneConfiguration();
-    conf.setInt(OMConfigKeys.OZONE_OM_CONTAINER_LOCATION_CACHE_SIZE, numberOfItems);
+    conf.setInt(OMConfigKeys.OZONE_OM_CONTAINER_LOCATION_CACHE_SIZE, numberOfItems + 10000);
 
     scmClient = new ScmClient(null, mockLocationProtocol, conf);
 
     for (int i = 0; i < numberOfItems; i++) {
-      scmClient.getContainerLocation(i, false);
+      scmClient.getContainerLocations(Collections.singleton((long) i), false);
+    }
+    mockLocationProtocol.datanodeDetails = null;
+    System.out.println("Populated " + numberOfItems + " to the cache.");
+
+    for (int i = 0; i < numberOfItems; i++) {
+      scmClient.getContainerLocations(Collections.singleton((long) i), false);
     }
 
-    System.out.println("Populated " + numberOfItems + " to the cache.");
+    System.gc();
+    System.out.println("Ready to examine heap size");
 
     // Pause to allow external operation, e.g. heapdump export
     System.in.read();
@@ -85,6 +110,20 @@ public class ContainerLocationCacheSimulation {
 
   public static class MockStorageContainerLocationProtocol implements
       StorageContainerLocationProtocol {
+
+    List<DatanodeDetails> datanodeDetails;
+    Random rand = new Random();
+
+    MockStorageContainerLocationProtocol(int numberOfDataNodes) {
+      datanodeDetails = new ArrayList<>(numberOfDataNodes);
+      for (int i = 0; i < numberOfDataNodes; i++) {
+        datanodeDetails.add(randomDatanode());
+      }
+    }
+
+    DatanodeDetails getRandomDatanode() {
+      return datanodeDetails.get(rand.nextInt(datanodeDetails.size()));
+    }
 
     @Override
     public ContainerWithPipeline allocateContainer(
@@ -101,41 +140,34 @@ public class ContainerLocationCacheSimulation {
     @Override
     public ContainerWithPipeline getContainerWithPipeline(long containerID)
         throws IOException {
-      return randomPipeline(containerID);
+      return ContainerWithPipeline.fromProtobuf(
+          randomPipeline(containerID).getProtobuf(3)
+      );
     }
 
     private ContainerWithPipeline randomPipeline(long containerId) {
+      ReplicationConfig replicationConf = fromTypeAndFactor(
+          ReplicationType.RATIS, ReplicationFactor.THREE);
       ContainerInfo containerInfo = new ContainerInfo.Builder()
           .setContainerID(containerId)
+          .setState(HddsProtos.LifeCycleState.DELETING)
+          .setOwner("")
+          .setStateEnterTime(0)
+          .setReplicationConfig(replicationConf)
           .build();
       Pipeline pipeline = Pipeline.newBuilder()
           .setId(PipelineID.randomId())
           .setNodes(asList(
-              randomDatanode(),
-              randomDatanode(),
-              randomDatanode())
+              getRandomDatanode(),
+              getRandomDatanode(),
+              getRandomDatanode())
           )
-          .setReplicationConfig(fromTypeAndFactor(
-              ReplicationType.RATIS, ReplicationFactor.THREE))
+          .setReplicationConfig(replicationConf)
           .setState(Pipeline.PipelineState.OPEN)
           .build();
       return new ContainerWithPipeline(containerInfo, pipeline);
     }
 
-    private DatanodeDetails randomDatanode() {
-      return DatanodeDetails.newBuilder()
-          .setUuid(UUID.randomUUID())
-          .setHostName(randomAlphabetic(50))
-          .setIpAddress(randomAlphabetic(15)) // IPV4 (xxx.xxx.xxx.xxx)
-          .addPort(new Port(RATIS, 1024))
-          .addPort(new Port(STANDALONE, 1025))
-          .addPort(new Port(REST, 1026))
-          .addPort(new Port(REPLICATION, 1025))
-          .setNetworkName(randomAlphabetic(20))
-          .setNetworkLocation("/" + randomAlphabetic(19))
-          .setPersistedOpState(IN_SERVICE)
-          .build();
-    }
 
     @Override
     public List<HddsProtos.SCMContainerReplicaProto> getContainerReplicas(
@@ -146,9 +178,13 @@ public class ContainerLocationCacheSimulation {
     @Override
     public List<ContainerWithPipeline> getContainerWithPipelineBatch(
         Iterable<? extends Long> containerIDs) throws IOException {
-      return StreamSupport.stream(containerIDs.spliterator(), false)
-          .map(this::randomPipeline)
-          .collect(Collectors.toList());
+      List<ContainerWithPipeline> list = new LinkedList<>();
+      for (Long containerID : containerIDs) {
+        ContainerWithPipeline containerWithPipeline =
+            getContainerWithPipeline(containerID);
+        list.add(containerWithPipeline);
+      }
+      return list;
     }
 
     @Override
