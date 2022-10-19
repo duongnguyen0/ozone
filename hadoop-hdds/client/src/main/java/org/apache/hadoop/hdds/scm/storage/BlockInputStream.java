@@ -150,12 +150,15 @@ public class BlockInputStream extends BlockExtendedInputStream {
       } catch (SCMSecurityException ex) {
         throw ex;
       } catch (StorageContainerException ex) {
+        LOG.info("Refresh pipeline and retry to get chunk info fail", ex);
         refreshPipeline(ex);
         catchEx = ex;
       } catch (IOException ex) {
-        LOG.debug("Retry to get chunk info fail", ex);
         if (isConnectivityIssue(ex)) {
+          LOG.info("Refresh pipeline and retry to get chunk info fail", ex);
           refreshPipeline(ex);
+        } else {
+          LOG.info("Retry without refreshing pipeline to get chunk info", ex);
         }
         catchEx = ex;
       }

@@ -443,10 +443,10 @@ public class XceiverClientGrpc extends XceiverClientSpi {
       String message = "Failed to execute command {}";
       if (LOG.isDebugEnabled()) {
         LOG.debug(message + " on the pipeline {}.",
-                processForDebug(request), pipeline);
+                processForDebug(request), pipeline, ioException);
       } else {
         LOG.error(message + " on the pipeline {}.",
-                request.getCmdType(), pipeline);
+                request.getCmdType(), pipeline, ioException);
       }
       throw ioException;
     }
