@@ -199,7 +199,7 @@ public class BlockInputStream extends BlockExtendedInputStream {
    * Check if this exception is because datanodes are not reachable.
    */
   private boolean isConnectivityIssue(IOException ex) {
-    return Status.fromThrowable(ex) == Status.UNAVAILABLE;
+    return Status.fromThrowable(ex).getCode() == Status.UNAVAILABLE.getCode();
   }
 
   private void refreshPipeline(IOException cause) throws IOException {
