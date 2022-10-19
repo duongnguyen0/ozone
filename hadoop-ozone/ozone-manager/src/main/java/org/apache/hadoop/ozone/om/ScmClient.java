@@ -28,6 +28,8 @@ import org.apache.hadoop.hdds.scm.protocol.StorageContainerLocationProtocol;
 import org.apache.hadoop.hdds.scm.update.client.SCMUpdateServiceGrpcClient;
 import org.apache.hadoop.util.CacheMetrics;
 import org.jetbrains.annotations.NotNull;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.Map;
@@ -44,6 +46,8 @@ import static org.apache.hadoop.ozone.om.OMConfigKeys.OZONE_OM_CONTAINER_LOCATIO
  * Wrapper class for Scm protocol clients.
  */
 public class ScmClient {
+  private static final Logger LOG =
+      LoggerFactory.getLogger(KeyManagerImpl.class);
 
   private final ScmBlockLocationProtocol blockClient;
   private final StorageContainerLocationProtocol containerClient;
@@ -86,6 +90,7 @@ public class ScmClient {
           @Override
           public Map<Long, Pipeline> loadAll(
               @NotNull Iterable<? extends Long> keys) throws Exception {
+            LOG.info("Calling SCM for key {}", keys);
             return containerClient.getContainerWithPipelineBatch(keys)
                 .stream()
                 .collect(Collectors.toMap(
@@ -117,6 +122,7 @@ public class ScmClient {
                                                   boolean forceRefresh)
       throws IOException {
     if (forceRefresh) {
+      LOG.info("Forcing cache refresh for containers {}", containerIds);
       containerLocationCache.invalidateAll(containerIds);
     }
     try {
