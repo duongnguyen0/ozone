@@ -196,7 +196,7 @@
 
     <!-- Maven protoc compiler -->
     <protobuf-maven-plugin.version>0.5.1</protobuf-maven-plugin.version>
-    <grpc.protobuf-compile.version>3.19.2</grpc.protobuf-compile.version>
+    <grpc.protobuf-compile.version>3.19.6</grpc.protobuf-compile.version>
     <os-maven-plugin.version>1.5.0.Final</os-maven-plugin.version>
 
     <netty.version>4.1.77.Final</netty.version>
