@@ -27,6 +27,7 @@ import org.apache.hadoop.io.retry.RetryPolicy;
 import org.apache.hadoop.ipc.ProtobufRpcEngine;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.ozone.HddsDatanodeService;
 import org.apache.hadoop.ozone.common.Storage;
 import org.apache.hadoop.ozone.container.common.DatanodeLayoutStorage;
 import org.apache.hadoop.ozone.container.common.impl.StorageLocationReport;
@@ -37,6 +38,8 @@ import org.apache.hadoop.ozone.protocolPB.StorageContainerDatanodeProtocolPB;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.util.Time;
 import org.jetbrains.annotations.NotNull;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
 
 import java.io.IOException;
@@ -68,6 +71,8 @@ import static org.apache.hadoop.hdds.utils.HddsServerUtil.getScmRpcRetryInterval
     mixinStandardHelpOptions = true,
     showDefaultValues = true)
 public class DatanodeSimulator implements Callable<Void> {
+  private static final Logger LOGGER = LoggerFactory.getLogger(
+      HddsDatanodeService.class);
 
 
   private List<StorageContainerDatanodeProtocolClientSideTranslatorPB>
@@ -77,6 +82,7 @@ public class DatanodeSimulator implements Callable<Void> {
   private DatanodeState[] datanodes;
 
   private ScheduledExecutorService heartbeatScheduler;
+  private LayoutVersionProto layoutInfo;
 
   @CommandLine.ParentCommand
   private Freon freonCommand;
@@ -96,12 +102,16 @@ public class DatanodeSimulator implements Callable<Void> {
     init();
     datanodes = new DatanodeState[datanodesCount];
     for (int i = 0; i < datanodesCount; i++) {
-      datanodes[i] = new DatanodeState(createDatanodeDetails(conf), conf);
+      datanodes[i] = new DatanodeState(randomDatanodeDetails(conf), conf);
     }
 
+    int successCount = 0;
     for (DatanodeState dn : datanodes) {
-      startDatanode(dn);
+      successCount += startDatanode(dn) ? 1 : 0;
     }
+
+    LOGGER.info("{} datanodes was simulated and registered to SCM/recode",
+        successCount);
 
     Runtime.getRuntime().addShutdownHook(
         new Thread(() -> {
@@ -121,17 +131,18 @@ public class DatanodeSimulator implements Callable<Void> {
 
   private boolean startDatanode(DatanodeState dn)
       throws IOException {
-    System.out.println("Registering datanode to SCM/Recon: "
-        + dn.datanodeDetails.getHostName());
     if (!registerDataNode(dn)) {
+      LOGGER.info("Failed to register datanode to SCM: {}",
+          dn.datanodeDetails.getUuidString());
       return false;
     }
 
+    // Schedule heartbeat tasks for the given datanode to all SCMs/Recon.
     long scmHeartbeatInterval = HddsServerUtil.getScmHeartbeatInterval(conf);
     for (StorageContainerDatanodeProtocol client : scmClients) {
-      // Use random initial delay to add a jitter to avoid peaks.
+      // Use random initial delay as a jitter to avoid peaks.
       long initialDelay = random.nextLong() % scmHeartbeatInterval;
-      Runnable runnable = () -> heartBeat(client, dn);
+      Runnable runnable = () -> heartbeat(client, dn);
       heartbeatScheduler.scheduleAtFixedRate(runnable, initialDelay,
           scmHeartbeatInterval, TimeUnit.MILLISECONDS);
     }
@@ -139,27 +150,29 @@ public class DatanodeSimulator implements Callable<Void> {
     long reconHeartbeatInterval =
         HddsServerUtil.getReconHeartbeatInterval(conf);
     long initialDelay = random.nextLong() % reconHeartbeatInterval;
-    Runnable runnable = () -> heartBeat(reconClient, dn);
+    Runnable runnable = () -> heartbeat(reconClient, dn);
     heartbeatScheduler.scheduleAtFixedRate(runnable, initialDelay,
         scmHeartbeatInterval, TimeUnit.MILLISECONDS);
 
+    LOGGER.info("Successfully registered datanode to SCM: {}",
+        dn.datanodeDetails.getUuidString());
     return true;
   }
 
-  private void heartBeat(StorageContainerDatanodeProtocol client,
+  private void heartbeat(StorageContainerDatanodeProtocol client,
                          DatanodeState dn) {
     try {
       SCMHeartbeatRequestProto heartbeat =
           SCMHeartbeatRequestProto.newBuilder()
               .setDatanodeDetails(dn.datanodeDetails.getProtoBufMessage())
-              .setDataNodeLayoutVersion(dn.layoutInfo)
+              .setDataNodeLayoutVersion(this.layoutInfo)
               .setNodeReport(createNodeReport())
               .build();
       SCMHeartbeatResponseProto response = client.sendHeartbeat(heartbeat);
       dn.processCommands(response.getCommandsList());
     } catch (IOException | TimeoutException e) {
-      // todo: log
-      e.printStackTrace();
+      LOGGER.info("Error sending heartbeat for {}: {}",
+          dn.datanodeDetails.getUuidString(), e.getMessage());
     }
   }
 
@@ -176,20 +189,35 @@ public class DatanodeSimulator implements Callable<Void> {
     reconClient = createReconClient(reconAddress);
 
     heartbeatScheduler = Executors.newScheduledThreadPool(threadCount);
+
+    this.layoutInfo = createLayoutInfo();
   }
 
-  private DatanodeDetails createDatanodeDetails(ConfigurationSource conf)
+  private LayoutVersionProto createLayoutInfo() throws IOException {
+    Storage layoutStorage = new DatanodeLayoutStorage(conf,
+        UUID.randomUUID().toString());
+
+    HDDSLayoutVersionManager layoutVersionManager =
+        new HDDSLayoutVersionManager(layoutStorage.getLayoutVersion());
+
+    return LayoutVersionProto.newBuilder()
+        .setMetadataLayoutVersion(
+            layoutVersionManager.getMetadataLayoutVersion())
+        .setSoftwareLayoutVersion(
+            layoutVersionManager.getSoftwareLayoutVersion())
+        .build();
+  }
+
+  private DatanodeDetails randomDatanodeDetails(ConfigurationSource conf)
       throws UnknownHostException {
-
-    String hostname = HddsUtils.getHostName(conf) + "-"
-        + UUID.randomUUID();
-
     DatanodeDetails details = DatanodeDetails.newBuilder()
-        .setUuid(UUID.randomUUID()).build();
+        .setUuid(UUID.randomUUID())
+        .build();
     details.setInitialVersion(DatanodeVersion.CURRENT_VERSION);
     details.setCurrentVersion(DatanodeVersion.CURRENT_VERSION);
-    details.setHostName(hostname);
+    details.setHostName(HddsUtils.getHostName(conf));
     details.setIpAddress(randomIp());
+    details.setPort(DatanodeDetails.Port.Name.STANDALONE, 1234);
     details.setVersion(
         HddsVersionInfo.HDDS_VERSION_INFO.getVersion());
     details.setSetupTime(Time.now());
@@ -202,7 +230,6 @@ public class DatanodeSimulator implements Callable<Void> {
 
   private boolean registerDataNode(DatanodeState dn)
       throws IOException {
-    LayoutVersionProto layoutInfo = dn.layoutInfo;
 
     ContainerReportsProto containerReports =
         ContainerReportsProto.newBuilder().build();
@@ -217,7 +244,7 @@ public class DatanodeSimulator implements Callable<Void> {
       try {
         SCMRegisteredResponseProto response =
             client.register(dn.datanodeDetails.getExtendedProtoBufMessage(),
-                nodeReport, containerReports, pipelineReports, layoutInfo);
+                nodeReport, containerReports, pipelineReports, this.layoutInfo);
         if (response.hasHostname() && response.hasIpAddress()) {
           dn.datanodeDetails.setHostName(response.getHostname());
           dn.datanodeDetails.setIpAddress(response.getIpAddress());
@@ -230,19 +257,18 @@ public class DatanodeSimulator implements Callable<Void> {
             (response.getErrorCode() ==
                 SCMRegisteredResponseProto.ErrorCode.success);
       } catch (IOException e) {
-        // todo: log
-        e.printStackTrace();
+        LOGGER.error("Error register datanode to SCM", e);
       }
     }
 
     try {
-      SCMRegisteredResponseProto response =
-          reconClient.register(dn.datanodeDetails.getExtendedProtoBufMessage(),
-              nodeReport, containerReports, pipelineReports, layoutInfo);
+      reconClient.register(dn.datanodeDetails.getExtendedProtoBufMessage(),
+              nodeReport, containerReports, pipelineReports, this.layoutInfo);
     } catch (IOException e) {
-      // todo: log
-      e.printStackTrace();
+      LOGGER.error("Error register datanode to Recon", e);
     }
+
+    dn.isRegistered = isRegistered;
 
     return isRegistered;
   }
@@ -344,28 +370,18 @@ public class DatanodeSimulator implements Callable<Void> {
 
   private static class DatanodeState {
     private final DatanodeDetails datanodeDetails;
-    private final LayoutVersionProto layoutInfo;
+    private boolean isRegistered = false;
 
     private DatanodeState(DatanodeDetails datanodeDetails,
                           ConfigurationSource conf) throws IOException {
       this.datanodeDetails = datanodeDetails;
-
-      Storage layoutStorage = new DatanodeLayoutStorage(conf,
-          datanodeDetails.getUuidString());
-
-      HDDSLayoutVersionManager layoutVersionManager =
-          new HDDSLayoutVersionManager(layoutStorage.getLayoutVersion());
-
-      this.layoutInfo = LayoutVersionProto.newBuilder()
-          .setMetadataLayoutVersion(
-              layoutVersionManager.getMetadataLayoutVersion())
-          .setSoftwareLayoutVersion(
-              layoutVersionManager.getSoftwareLayoutVersion())
-          .build();
     }
 
     public void processCommands(List<SCMCommandProto> commands) {
-      System.out.println(commands);
+      if (commands.size() > 0) {
+        LOGGER.info("Heartbeat command for {} from SCM: {}",
+            datanodeDetails.getUuidString(), commands);
+      }
     }
   }
 }
