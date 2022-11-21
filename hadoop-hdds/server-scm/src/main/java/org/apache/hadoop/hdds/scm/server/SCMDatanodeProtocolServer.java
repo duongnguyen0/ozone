@@ -104,6 +104,8 @@ import static org.apache.hadoop.hdds.scm.events.SCMEvents.PIPELINE_REPORT;
 import static org.apache.hadoop.hdds.scm.server.StorageContainerManager.startRpcServer;
 import static org.apache.hadoop.hdds.server.ServerUtils.getRemoteUserName;
 import static org.apache.hadoop.hdds.server.ServerUtils.updateRPCListenAddress;
+
+import org.apache.hadoop.util.Time;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -224,6 +226,7 @@ public class SCMDatanodeProtocolServer implements
       PipelineReportsProto pipelineReportsProto,
       LayoutVersionProto layoutInfo)
       throws IOException {
+    long start = Time.monotonicNowNanos();
     DatanodeDetails datanodeDetails = DatanodeDetails
         .getFromProtoBuf(extendedDatanodeDetailsProto);
     boolean auditSuccess = true;
@@ -258,6 +261,9 @@ public class SCMDatanodeProtocolServer implements
         AUDIT.logWriteSuccess(
             buildAuditMessageForSuccess(SCMAction.REGISTER, auditMap));
       }
+      StorageContainerManager.getMetrics().addRegisterLatency(
+          Time.monotonicNowNanos() - start
+      );
     }
   }
 
@@ -270,6 +276,7 @@ public class SCMDatanodeProtocolServer implements
   @Override
   public SCMHeartbeatResponseProto sendHeartbeat(
       SCMHeartbeatRequestProto heartbeat) throws IOException, TimeoutException {
+    long start = Time.monotonicNowNanos();
     List<SCMCommandProto> cmdResponses = new ArrayList<>();
     for (SCMCommand cmd : heartbeatDispatcher.dispatch(heartbeat)) {
       cmdResponses.add(getCommandResponse(cmd));
@@ -294,6 +301,10 @@ public class SCMDatanodeProtocolServer implements
             buildAuditMessageForSuccess(SCMAction.SEND_HEARTBEAT, auditMap)
         );
       }
+
+      StorageContainerManager.getMetrics().addHeartbeatLatency(
+          Time.monotonicNowNanos() - start
+      );
     }
   }
 

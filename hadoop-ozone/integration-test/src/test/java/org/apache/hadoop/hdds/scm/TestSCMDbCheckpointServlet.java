@@ -34,6 +34,7 @@ import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.scm.container.placement.metrics.SCMMetrics;
 import org.apache.hadoop.hdds.scm.server.SCMDBCheckpointServlet;
 import org.apache.hadoop.hdds.scm.server.StorageContainerManager;
+import org.apache.hadoop.hdds.utils.DBCheckpointMetrics;
 import org.apache.hadoop.ozone.MiniOzoneCluster;
 import org.apache.hadoop.ozone.OzoneConsts;
 
@@ -62,6 +63,7 @@ public class TestSCMDbCheckpointServlet {
   private MiniOzoneCluster cluster = null;
   private StorageContainerManager scm;
   private SCMMetrics scmMetrics;
+  private DBCheckpointMetrics checkpointMetrics;
   private OzoneConfiguration conf;
   private String clusterId;
   private String scmId;
@@ -96,6 +98,7 @@ public class TestSCMDbCheckpointServlet {
     cluster.waitForClusterToBeReady();
     scm = cluster.getStorageContainerManager();
     scmMetrics = StorageContainerManager.getMetrics();
+    checkpointMetrics = DBCheckpointMetrics.create("test");
   }
 
   /**
@@ -119,7 +122,7 @@ public class TestSCMDbCheckpointServlet {
       doCallRealMethod().when(scmDbCheckpointServletMock).init();
       doCallRealMethod().when(scmDbCheckpointServletMock).initialize(
           scm.getScmMetadataStore().getStore(),
-          scmMetrics.getDBCheckpointMetrics(),
+          checkpointMetrics,
           false,
           Collections.emptyList(),
           false);
@@ -165,18 +168,18 @@ public class TestSCMDbCheckpointServlet {
 
       scmDbCheckpointServletMock.init();
       long initialCheckpointCount =
-          scmMetrics.getDBCheckpointMetrics().getNumCheckpoints();
+          checkpointMetrics.getNumCheckpoints();
 
       scmDbCheckpointServletMock.doGet(requestMock, responseMock);
 
       Assert.assertTrue(tempFile.length() > 0);
       Assert.assertTrue(
-          scmMetrics.getDBCheckpointMetrics().
+          checkpointMetrics.
               getLastCheckpointCreationTimeTaken() > 0);
       Assert.assertTrue(
-          scmMetrics.getDBCheckpointMetrics().
+          checkpointMetrics.
               getLastCheckpointStreamingTimeTaken() > 0);
-      Assert.assertTrue(scmMetrics.getDBCheckpointMetrics().
+      Assert.assertTrue(checkpointMetrics.
           getNumCheckpoints() > initialCheckpointCount);
     } finally {
       FileUtils.deleteQuietly(tempFile);

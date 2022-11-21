@@ -24,6 +24,7 @@ import org.apache.hadoop.metrics2.annotation.Metrics;
 import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
 import org.apache.hadoop.metrics2.lib.MutableCounterLong;
 import org.apache.hadoop.metrics2.lib.MutableGaugeLong;
+import org.apache.hadoop.metrics2.lib.MutableRate;
 
 /**
  * This class is for maintaining StorageContainerManager statistics.
@@ -52,6 +53,10 @@ public class SCMMetrics {
   @Metric private MutableCounterLong containerReportWriteBytes;
   @Metric private MutableCounterLong containerReportReadCount;
   @Metric private MutableCounterLong containerReportWriteCount;
+
+  @Metric private MutableRate heartbeatLatency;
+  @Metric private MutableRate registerLatency;
+  @Metric private MutableRate containersPerHeartbeat;
 
   private DBCheckpointMetrics dbCheckpointMetrics;
 
@@ -123,6 +128,18 @@ public class SCMMetrics {
 
   public void incrContainerReportWriteCount(long writeCount) {
     this.containerReportWriteCount.incr(writeCount);
+  }
+
+  public void addHeartbeatLatency(long latencyInNs) {
+    heartbeatLatency.add(latencyInNs);
+  }
+
+  public void addRegisterLatency(long latencyInNs) {
+    registerLatency.add(latencyInNs);
+  }
+
+  public void addContainersPerHeartbeat(long containersCount) {
+    containersPerHeartbeat.add(containersCount);
   }
 
   public void setLastContainerStat(ContainerStat newStat) {
