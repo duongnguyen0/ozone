@@ -1,34 +1,19 @@
 package org.apache.hadoop.ozone.freon;
 
 
-import com.fasterxml.jackson.core.JsonGenerator;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.databind.DeserializationContext;
-import com.fasterxml.jackson.databind.SerializerProvider;
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
-import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
-import com.fasterxml.jackson.databind.ser.std.StdSerializer;
 import org.apache.commons.io.IOUtils;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.StorageType;
 import org.apache.hadoop.hdds.DatanodeVersion;
 import org.apache.hadoop.hdds.HddsUtils;
 import org.apache.hadoop.hdds.cli.HddsVersionProvider;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
-import org.apache.hadoop.hdds.conf.StorageUnit;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
-import org.apache.hadoop.hdds.protocol.proto.HddsProtos.DatanodeDetailsProto;
-import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.CloseContainerCommandProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.ContainerReplicaProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.ContainerReportsProto;
-import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.CreatePipelineCommandProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.LayoutVersionProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.NodeReportProto;
-import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.PipelineReport;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.PipelineReportsProto;
-import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.SCMCommandProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.SCMHeartbeatRequestProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.SCMHeartbeatResponseProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.SCMRegisteredResponseProto;
@@ -46,10 +31,8 @@ import org.apache.hadoop.io.retry.RetryPolicy;
 import org.apache.hadoop.ipc.ProtobufRpcEngine;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.net.NetUtils;
-import org.apache.hadoop.ozone.HddsDatanodeService;
 import org.apache.hadoop.ozone.common.Storage;
 import org.apache.hadoop.ozone.container.common.DatanodeLayoutStorage;
-import org.apache.hadoop.ozone.container.common.impl.StorageLocationReport;
 import org.apache.hadoop.ozone.protocol.StorageContainerDatanodeProtocol;
 import org.apache.hadoop.ozone.protocolPB.ReconDatanodeProtocolPB;
 import org.apache.hadoop.ozone.protocolPB.StorageContainerDatanodeProtocolClientSideTranslatorPB;
@@ -71,28 +54,45 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.hadoop.hdds.HddsUtils.getReconAddresses;
 import static org.apache.hadoop.hdds.HddsUtils.getSCMAddressForDatanodes;
 import static org.apache.hadoop.hdds.scm.ScmConfigKeys.OZONE_SCM_HEARTBEAT_RPC_TIMEOUT;
 import static org.apache.hadoop.hdds.scm.ScmConfigKeys.OZONE_SCM_HEARTBEAT_RPC_TIMEOUT_DEFAULT;
+import static org.apache.hadoop.hdds.utils.HddsServerUtil.getScmHeartbeatInterval;
 import static org.apache.hadoop.hdds.utils.HddsServerUtil.getScmRpcRetryCount;
 import static org.apache.hadoop.hdds.utils.HddsServerUtil.getScmRpcRetryInterval;
 
+/**
+ * This command simulates a number of datanodes and target to coordinate with
+ * SCM to create a number of containers on the said datanodes.
+ *
+ * This tool is created to verify the SCM/Recon ability to handle thousands
+ * datanodes and exabytes of data.
+ *
+ * Usage:
+ *    ozone freon simulate-datanode -t 20 -n 5000 -c 10000
+ *      -t: number of threads to run datanodes heartbeat.
+ *      -n: number of data node to simulate.
+ *      -c: number containers to simulate per datanode.
+ *
+ * The simulation can be stopped and restored safely as datanode states,
+ *  including pipelines and containers are saved to a file when the process
+ *  exits.
+ *
+ * When the number containers exceeds the required one, all datanodes are
+ * transitioned to readonly mode (all pipelines are closed).
+ */
 @CommandLine.Command(name = "simulate-datanode",
     description =
         "Simulate one or many datanodes and register them to SCM." +
@@ -102,15 +102,15 @@ import static org.apache.hadoop.hdds.utils.HddsServerUtil.getScmRpcRetryInterval
     showDefaultValues = true)
 public class DatanodeSimulator implements Callable<Void> {
   private static final Logger LOGGER = LoggerFactory.getLogger(
-      HddsDatanodeService.class);
+      DatanodeSimulator.class);
 
   private List<StorageContainerDatanodeProtocolClientSideTranslatorPB>
       scmClients;
   private StorageContainerDatanodeProtocolClientSideTranslatorPB reconClient;
 
   private ConfigurationSource conf;
-  private List<DatanodeState> datanodes;
-  private Map<UUID, DatanodeState> datanodesMap;
+  private List<DatanodeSimulationState> datanodes;
+  private Map<UUID, DatanodeSimulationState> datanodesMap;
 
   private ScheduledExecutorService heartbeatScheduler;
   private LayoutVersionProto layoutInfo;
@@ -133,36 +133,29 @@ public class DatanodeSimulator implements Callable<Void> {
 
   @CommandLine.Option(names = {"-r", "--reload"},
       description = "Reload the datanodes created by previous simulation run.",
-      defaultValue = "false")
-  private boolean reload = false;
+      defaultValue = "true")
+  private boolean reload = true;
 
   private Random random = new Random();
+
+  // stats
+  private AtomicLong totalHeartbeats = new AtomicLong(0);
+  private AtomicLong totalReportedContainers = new AtomicLong(0);
+  private StorageContainerLocationProtocol scmContainerClient;
 
   @Override
   public Void call() throws Exception {
     init();
-    if (reload) {
-      datanodes = loadDatanodesFromFile();
-    } else {
-      datanodes = new ArrayList<>(datanodesCount);
-    }
-    for (int i = datanodes.size(); i < datanodesCount; i++) {
-      datanodes.add(new DatanodeState(randomDatanodeDetails(conf)));
-    }
+    loadOrCreateDatanodes();
 
-    datanodesMap = new HashMap<>();
-    for (DatanodeState datanode : datanodes) {
-      datanodesMap.put(datanode.datanodeDetails.getUuid(), datanode);
-    }
-
+    // Register datanodes to SCM/Recon and schedule heartbeat for each.
     int successCount = 0;
-    for (DatanodeState dn : datanodes) {
+    for (DatanodeSimulationState dn : datanodes) {
       successCount += startDatanode(dn) ? 1 : 0;
     }
 
-    LOGGER.info("{} datanodes was simulated and registered to SCM/Recon",
+    LOGGER.info("{} datanodes have been created and registered to SCM/Recon",
         successCount);
-
 
     Runtime.getRuntime().addShutdownHook(
         new Thread(() -> {
@@ -179,17 +172,83 @@ public class DatanodeSimulator implements Callable<Void> {
         })
     );
 
-    createContainers();
+    backgroundStatsReporter();
+
+    try {
+      growContainers();
+    } catch (IOException e) {
+      LOGGER.error("Error creating containers, exiting.", e);
+      throw e;
+    }
+
+    LOGGER.info("Finished creating container, " +
+        "transitioning datanodes to readonly");
+    moveDatanodesToReadonly();
+
+    LOGGER.info("All datanodes have been transitioned to read-only.");
 
     return null;
   }
 
-  private void createContainers() throws IOException {
-    StorageContainerLocationProtocol
-        scmContainerClient = HAUtils.getScmContainerClient(conf);
+  private void moveDatanodesToReadonly() {
+    for (DatanodeSimulationState dn : datanodes) {
+      dn.setReadOnly(true);
+      for (String pipeline : dn.getPipelines()) {
+        try {
+          scmContainerClient.closePipeline(HddsProtos.PipelineID.newBuilder()
+              .setId(pipeline).build());
+        } catch (IOException e) {
+          LOGGER.error("Error closing pipeline {}", pipeline, e);
+        }
+      }
+    }
+  }
+
+  private void backgroundStatsReporter() {
+    long interval = getScmHeartbeatInterval(conf);
+    final AtomicLong lastTotalHeartbeats = new AtomicLong(0);
+    final AtomicLong lastTotalReportedContainers = new AtomicLong(0);
+    final AtomicReference<Instant> lastCheck =
+        new AtomicReference<>(Instant.now());
+    heartbeatScheduler.scheduleAtFixedRate(() -> {
+      long heartbeats = totalHeartbeats.get() - lastTotalHeartbeats.get();
+      lastTotalHeartbeats.set(totalHeartbeats.get());
+      long reportedContainers = totalReportedContainers.get() -
+          lastTotalReportedContainers.get();
+      lastTotalReportedContainers.set(totalReportedContainers.get());
+
+      long intervalInSeconds = Instant.now().getEpochSecond()
+          - lastCheck.get().getEpochSecond();
+      lastCheck.set(Instant.now());
+
+      LOGGER.info("Heartbeat status: \n" +
+              "Total heartbeat in cycle: {} ({} per second) \n" +
+              "Total container reported in cycle: {} ({} per second)",
+          heartbeats, heartbeats / intervalInSeconds,
+          reportedContainers, reportedContainers / intervalInSeconds);
+    }, interval, interval, TimeUnit.MILLISECONDS);
+  }
+
+  private void loadOrCreateDatanodes() throws UnknownHostException {
+    if (reload) {
+      datanodes = loadDatanodesFromFile();
+    } else {
+      datanodes = new ArrayList<>(datanodesCount);
+    }
+    for (int i = datanodes.size(); i < datanodesCount; i++) {
+      datanodes.add(new DatanodeSimulationState(randomDatanodeDetails(conf)));
+    }
+
+    datanodesMap = new HashMap<>();
+    for (DatanodeSimulationState datanode : datanodes) {
+      datanodesMap.put(datanode.getDatanodeDetails().getUuid(), datanode);
+    }
+  }
+
+  private void growContainers() throws IOException {
     int totalAssignedContainers = 0;
-    for (DatanodeState datanode : datanodes) {
-      totalAssignedContainers += datanode.containers.size();
+    for (DatanodeSimulationState datanode : datanodes) {
+      totalAssignedContainers += datanode.getContainers().size();
     }
     int totalExpectedContainers = datanodesCount * containers;
     int totalCreatedContainers = 0;
@@ -202,9 +261,9 @@ public class DatanodeSimulator implements Callable<Void> {
       for (DatanodeDetails datanode : cp.getPipeline().getNodeSet()) {
         if (datanodesMap.containsKey(datanode.getUuid())) {
           datanodesMap.get(datanode.getUuid())
-              .containers.put(cp.getContainerInfo().getContainerID(),
+              .getContainers().put(cp.getContainerInfo().getContainerID(),
                   ContainerReplicaProto.State.OPEN);
-          totalAssignedContainers ++;
+          totalAssignedContainers++;
         }
       }
 
@@ -213,15 +272,15 @@ public class DatanodeSimulator implements Callable<Void> {
       scmContainerClient.closeContainer(cp.getContainerInfo().getContainerID());
     }
 
-    LOGGER.info("Finish assiging {} containers from {} created containers.",
+    LOGGER.info("Finish assigning {} containers from {} created containers.",
         totalAssignedContainers, totalCreatedContainers);
   }
 
-  private boolean startDatanode(DatanodeState dn)
+  private boolean startDatanode(DatanodeSimulationState dn)
       throws IOException {
     if (!registerDataNode(dn)) {
       LOGGER.info("Failed to register datanode to SCM: {}",
-          dn.datanodeDetails.getUuidString());
+          dn.getDatanodeDetails().getUuidString());
       return false;
     }
 
@@ -240,10 +299,10 @@ public class DatanodeSimulator implements Callable<Void> {
     long initialDelay = random.nextLong() % reconHeartbeatInterval;
     Runnable runnable = () -> heartbeat(reconClient, dn);
     heartbeatScheduler.scheduleAtFixedRate(runnable, initialDelay,
-        scmHeartbeatInterval, TimeUnit.MILLISECONDS);
+        reconHeartbeatInterval, TimeUnit.MILLISECONDS);
 
     LOGGER.info("Successfully registered datanode to SCM: {}",
-        dn.datanodeDetails.getUuidString());
+        dn.getDatanodeDetails().getUuidString());
     return true;
   }
 
@@ -260,7 +319,7 @@ public class DatanodeSimulator implements Callable<Void> {
         file.getAbsolutePath());
   }
 
-  List<DatanodeState> loadDatanodesFromFile() {
+  List<DatanodeSimulationState> loadDatanodesFromFile() {
     File metaDirPath = ServerUtils.getOzoneMetaDirPath(conf);
     File file = new File(metaDirPath, "datanode-simulation.json");
     if (!file.exists()) {
@@ -271,8 +330,9 @@ public class DatanodeSimulator implements Callable<Void> {
     try {
       String json =
           new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
-      List<DatanodeState> datanodeStates = (List<DatanodeState>)
-          JsonUtils.toJsonList(json, DatanodeState.class);
+      List<DatanodeSimulationState> datanodeStates =
+          (List<DatanodeSimulationState>)
+              JsonUtils.toJsonList(json, DatanodeSimulationState.class);
       LOGGER.info("Loaded {} datanodes from {}", datanodeStates.size(),
           file.getAbsolutePath());
       return datanodeStates;
@@ -282,16 +342,17 @@ public class DatanodeSimulator implements Callable<Void> {
   }
 
   private void heartbeat(StorageContainerDatanodeProtocol client,
-                         DatanodeState dn) {
+                         DatanodeSimulationState dn) {
     try {
-
-      SCMHeartbeatRequestProto heartbeat = dn.heartbeatRequest(layoutInfo
-      );
+      SCMHeartbeatRequestProto heartbeat = dn.heartbeatRequest(layoutInfo);
       SCMHeartbeatResponseProto response = client.sendHeartbeat(heartbeat);
       dn.ackHeartbeatResponse(response);
-    } catch (IOException | TimeoutException e) {
+      totalHeartbeats.incrementAndGet();
+      totalReportedContainers.addAndGet(heartbeat
+          .getContainerReport().getReportsCount());
+    } catch (Exception e) {
       LOGGER.info("Error sending heartbeat for {}: {}",
-          dn.datanodeDetails.getUuidString(), e.getMessage());
+          dn.getDatanodeDetails().getUuidString(), e.getMessage());
     }
   }
 
@@ -307,6 +368,8 @@ public class DatanodeSimulator implements Callable<Void> {
     reconClient = createReconClient(reconAddress);
 
     heartbeatScheduler = Executors.newScheduledThreadPool(threadCount);
+
+    scmContainerClient = HAUtils.getScmContainerClient(conf);
 
     this.layoutInfo = createLayoutInfo();
   }
@@ -348,7 +411,7 @@ public class DatanodeSimulator implements Callable<Void> {
     return details;
   }
 
-  private boolean registerDataNode(DatanodeState dn)
+  private boolean registerDataNode(DatanodeSimulationState dn)
       throws IOException {
 
     ContainerReportsProto containerReports =
@@ -363,15 +426,17 @@ public class DatanodeSimulator implements Callable<Void> {
     for (StorageContainerDatanodeProtocol client : scmClients) {
       try {
         SCMRegisteredResponseProto response =
-            client.register(dn.datanodeDetails.getExtendedProtoBufMessage(),
+            client.register(
+                dn.getDatanodeDetails().getExtendedProtoBufMessage(),
                 nodeReport, containerReports, pipelineReports, this.layoutInfo);
         if (response.hasHostname() && response.hasIpAddress()) {
-          dn.datanodeDetails.setHostName(response.getHostname());
-          dn.datanodeDetails.setIpAddress(response.getIpAddress());
+          dn.getDatanodeDetails().setHostName(response.getHostname());
+          dn.getDatanodeDetails().setIpAddress(response.getIpAddress());
         }
         if (response.hasNetworkName() && response.hasNetworkLocation()) {
-          dn.datanodeDetails.setNetworkName(response.getNetworkName());
-          dn.datanodeDetails.setNetworkLocation(response.getNetworkLocation());
+          dn.getDatanodeDetails().setNetworkName(response.getNetworkName());
+          dn.getDatanodeDetails()
+              .setNetworkLocation(response.getNetworkLocation());
         }
         isRegistered = isRegistered ||
             (response.getErrorCode() ==
@@ -382,13 +447,13 @@ public class DatanodeSimulator implements Callable<Void> {
     }
 
     try {
-      reconClient.register(dn.datanodeDetails.getExtendedProtoBufMessage(),
+      reconClient.register(dn.getDatanodeDetails().getExtendedProtoBufMessage(),
           nodeReport, containerReports, pipelineReports, this.layoutInfo);
     } catch (IOException e) {
       LOGGER.error("Error register datanode to Recon", e);
     }
 
-    dn.isRegistered = isRegistered;
+    dn.setRegistered(isRegistered);
 
     return isRegistered;
   }
@@ -456,208 +521,4 @@ public class DatanodeSimulator implements Callable<Void> {
         OZONE_SCM_HEARTBEAT_RPC_TIMEOUT_DEFAULT, TimeUnit.MILLISECONDS);
   }
 
-  /**
-   * Keeping state of a simulated datanode instance.
-   * Thread-Unsafe: This is designed to be mutated in the context
-   * of a single thread.
-   */
-  private static class DatanodeState {
-    private DatanodeDetails datanodeDetails;
-    private boolean isRegistered = false;
-    private Instant lastHeartbeat = Instant.MIN;
-    private Set<String> pipelines = new HashSet<>();
-    private Map<Long, ContainerReplicaProto.State> containers =
-        new ConcurrentHashMap<>();
-
-    private DatanodeState(DatanodeDetails datanodeDetails) {
-      this.datanodeDetails = datanodeDetails;
-    }
-
-    public DatanodeState() {
-    }
-
-    public void ackHeartbeatResponse(SCMHeartbeatResponseProto response) {
-      for (SCMCommandProto command : response.getCommandsList()) {
-        switch (command.getCommandType()) {
-        case createPipelineCommand:
-          CreatePipelineCommandProto pipelineCmd =
-              command.getCreatePipelineCommandProto();
-          if (pipelineCmd.getFactor() == HddsProtos.ReplicationFactor.ONE) {
-            pipelines.add(pipelineCmd.getPipelineID().getId());
-          } else {
-            LOGGER.info("Ignored pipeline creation for {}-{}",
-                pipelineCmd.getType(), pipelineCmd.getFactor());
-          }
-          break;
-        case closePipelineCommand:
-          pipelines.remove(
-              command.getClosePipelineCommandProto()
-                  .getPipelineID().getId());
-          break;
-        case closeContainerCommand:
-          CloseContainerCommandProto
-              closeContainerCmd = command.getCloseContainerCommandProto();
-          if (containers.containsKey(closeContainerCmd.getContainerID())) {
-            containers.put(closeContainerCmd.getContainerID(),
-                ContainerReplicaProto.State.CLOSED);
-          } else {
-            LOGGER.info("Unrecognized closeContainerCommand");
-          }
-          break;
-        default:
-          LOGGER.info("Ignored command: {}", command.getCommandType());
-        }
-      }
-      this.lastHeartbeat = Instant.now();
-    }
-
-    public SCMHeartbeatRequestProto heartbeatRequest(
-        LayoutVersionProto layoutInfo) throws IOException {
-      return
-          SCMHeartbeatRequestProto.newBuilder()
-              .setDatanodeDetails(datanodeDetails.getProtoBufMessage())
-              .setDataNodeLayoutVersion(layoutInfo)
-              .setNodeReport(createNodeReport())
-              .setPipelineReports(createPipelineReport())
-              .setContainerReport(createContainerReport())
-              .build();
-    }
-
-    private ContainerReportsProto createContainerReport() {
-      ContainerReportsProto.Builder builder =
-          ContainerReportsProto.newBuilder();
-      for (Map.Entry<Long, ContainerReplicaProto.State> entry :
-          containers.entrySet()) {
-        ContainerReplicaProto container = ContainerReplicaProto.newBuilder()
-            .setContainerID(entry.getKey())
-            .setReadCount(10_000)
-            .setWriteCount(10_000)
-            .setReadBytes(10_000_000L)
-            .setWriteBytes(5_000_000_000L)
-            .setKeyCount(10_000)
-            .setUsed(5_000_000_000L)
-            .setState(entry.getValue())
-            .setBlockCommitSequenceId(1000)
-            .setOriginNodeId(datanodeDetails.getUuidString())
-            .setReplicaIndex(0)
-            .build();
-        builder.addReports(container);
-      }
-      return builder.build();
-    }
-
-    private PipelineReportsProto createPipelineReport() {
-      PipelineReportsProto.Builder builder = PipelineReportsProto.newBuilder();
-      for (String pipelineId : pipelines) {
-        builder.addPipelineReport(
-            PipelineReport.newBuilder()
-                .setPipelineID(HddsProtos.PipelineID
-                    .newBuilder().setId(pipelineId).build())
-                .setIsLeader(true).build());
-      }
-      return builder.build();
-    }
-
-    private NodeReportProto createNodeReport()
-        throws IOException {
-      StorageLocationReport storageLocationReport = StorageLocationReport
-          .newBuilder()
-          .setStorageLocation("/tmp/unreal_storage")
-          .setId("simulated-storage-volume")
-          .setCapacity((long) StorageUnit.TB.toBytes(10))
-          .setScmUsed((long) StorageUnit.TB.toBytes(5))
-          .setRemaining((long) StorageUnit.TB.toBytes(5))
-          .setStorageType(StorageType.DEFAULT)
-          .build();
-
-      StorageLocationReport metaLocationReport = StorageLocationReport
-          .newBuilder()
-          .setStorageLocation("/tmp/unreal_metadata")
-          .setId("simulated-storage-volume")
-          .setCapacity((long) StorageUnit.GB.toBytes(100))
-          .setScmUsed((long) StorageUnit.GB.toBytes(50))
-          .setRemaining((long) StorageUnit.GB.toBytes(50))
-          .setStorageType(StorageType.DEFAULT)
-          .build();
-
-      return NodeReportProto.newBuilder()
-          .addStorageReport(storageLocationReport.getProtoBufMessage())
-          .addMetadataStorageReport(
-              metaLocationReport.getMetadataProtoBufMessage())
-          .build();
-    }
-
-    @JsonSerialize(using = DatanodeDetailsSerializer.class)
-    @JsonDeserialize(using = DatanodeDeserializer.class)
-    public DatanodeDetails getDatanodeDetails() {
-      return datanodeDetails;
-    }
-
-    public void setDatanodeDetails(
-        DatanodeDetails datanodeDetails) {
-      this.datanodeDetails = datanodeDetails;
-    }
-
-    public Instant getLastHeartbeat() {
-      return lastHeartbeat;
-    }
-
-    public void setLastHeartbeat(Instant lastHeartbeat) {
-      this.lastHeartbeat = lastHeartbeat;
-    }
-
-    public Set<String> getPipelines() {
-      return pipelines;
-    }
-
-    public void setPipelines(Set<String> pipelines) {
-      this.pipelines = pipelines;
-    }
-
-    public boolean isRegistered() {
-      return isRegistered;
-    }
-
-    public void setRegistered(boolean registered) {
-      isRegistered = registered;
-    }
-
-    public Map<Long, ContainerReplicaProto.State> getContainers() {
-      return containers;
-    }
-
-    public void setContainers(
-        Map<Long, ContainerReplicaProto.State> containers) {
-      this.containers = containers;
-    }
-  }
-
-  private static class DatanodeDetailsSerializer
-      extends StdSerializer<DatanodeDetails> {
-    protected DatanodeDetailsSerializer() {
-      super(DatanodeDetails.class);
-    }
-
-    @Override
-    public void serialize(DatanodeDetails value, JsonGenerator gen,
-                          SerializerProvider provider) throws IOException {
-      gen.writeBinary(value.getProtoBufMessage().toByteArray());
-    }
-  }
-
-  private static class DatanodeDeserializer
-      extends StdDeserializer<DatanodeDetails> {
-    protected DatanodeDeserializer() {
-      super(DatanodeDetails.class);
-    }
-
-    @Override
-    public DatanodeDetails deserialize(JsonParser p,
-                                       DeserializationContext ctxt)
-        throws IOException {
-      byte[] binaryValue = p.getBinaryValue();
-      return DatanodeDetails.getFromProtoBuf(
-          DatanodeDetailsProto.parseFrom(binaryValue));
-    }
-  }
 }
