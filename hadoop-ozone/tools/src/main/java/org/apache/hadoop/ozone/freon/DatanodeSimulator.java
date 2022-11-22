@@ -2,6 +2,7 @@ package org.apache.hadoop.ozone.freon;
 
 
 import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.RandomUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdds.DatanodeVersion;
 import org.apache.hadoop.hdds.HddsUtils;
@@ -9,7 +10,6 @@ import org.apache.hadoop.hdds.cli.HddsVersionProvider;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
-import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.ContainerReplicaProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.ContainerReportsProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.LayoutVersionProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.NodeReportProto;
@@ -54,6 +54,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -65,6 +66,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.apache.hadoop.hdds.HddsConfigKeys.HDDS_CONTAINER_REPORT_INTERVAL;
+import static org.apache.hadoop.hdds.HddsConfigKeys.HDDS_CONTAINER_REPORT_INTERVAL_DEFAULT;
 import static org.apache.hadoop.hdds.HddsUtils.getReconAddresses;
 import static org.apache.hadoop.hdds.HddsUtils.getSCMAddressForDatanodes;
 import static org.apache.hadoop.hdds.scm.ScmConfigKeys.OZONE_SCM_HEARTBEAT_RPC_TIMEOUT;
@@ -72,24 +75,25 @@ import static org.apache.hadoop.hdds.scm.ScmConfigKeys.OZONE_SCM_HEARTBEAT_RPC_T
 import static org.apache.hadoop.hdds.utils.HddsServerUtil.getScmHeartbeatInterval;
 import static org.apache.hadoop.hdds.utils.HddsServerUtil.getScmRpcRetryCount;
 import static org.apache.hadoop.hdds.utils.HddsServerUtil.getScmRpcRetryInterval;
+import static org.apache.hadoop.hdds.utils.HddsVersionInfo.HDDS_VERSION_INFO;
 
 /**
  * This command simulates a number of datanodes and target to coordinate with
  * SCM to create a number of containers on the said datanodes.
- *
+ * <p>
  * This tool is created to verify the SCM/Recon ability to handle thousands
  * datanodes and exabytes of data.
- *
+ * <p>
  * Usage:
- *    ozone freon simulate-datanode -t 20 -n 5000 -c 10000
- *      -t: number of threads to run datanodes heartbeat.
- *      -n: number of data node to simulate.
- *      -c: number containers to simulate per datanode.
- *
+ * ozone freon simulate-datanode -t 20 -n 5000 -c 10000
+ * -t: number of threads to run datanodes heartbeat.
+ * -n: number of data node to simulate.
+ * -c: number containers to simulate per datanode.
+ * <p>
  * The simulation can be stopped and restored safely as datanode states,
- *  including pipelines and containers are saved to a file when the process
- *  exits.
- *
+ * including pipelines and containers are saved to a file when the process
+ * exits.
+ * <p>
  * When the number containers exceeds the required one, all datanodes are
  * transitioned to readonly mode (all pipelines are closed).
  */
@@ -104,8 +108,9 @@ public class DatanodeSimulator implements Callable<Void> {
   private static final Logger LOGGER = LoggerFactory.getLogger(
       DatanodeSimulator.class);
 
-  private List<StorageContainerDatanodeProtocolClientSideTranslatorPB>
-      scmClients;
+  private Map<InetSocketAddress,
+      StorageContainerDatanodeProtocolClientSideTranslatorPB> scmClients;
+  private InetSocketAddress reconAddress;
   private StorageContainerDatanodeProtocolClientSideTranslatorPB reconClient;
 
   private ConfigurationSource conf;
@@ -140,7 +145,8 @@ public class DatanodeSimulator implements Callable<Void> {
 
   // stats
   private AtomicLong totalHeartbeats = new AtomicLong(0);
-  private AtomicLong totalReportedContainers = new AtomicLong(0);
+  private AtomicLong totalFCRs = new AtomicLong(0);
+  private AtomicLong totalICRs = new AtomicLong(0);
   private StorageContainerLocationProtocol scmContainerClient;
 
   @Override
@@ -165,10 +171,10 @@ public class DatanodeSimulator implements Callable<Void> {
           } catch (InterruptedException e) {
             throw new RuntimeException(e);
           }
-          scmClients.forEach(IOUtils::closeQuietly);
+          scmClients.values().forEach(IOUtils::closeQuietly);
           IOUtils.closeQuietly(reconClient);
           LOGGER.info("Successfully closed all the used resources");
-          storeDataNodesToFile();
+          saveDatanodesToFile();
         })
     );
 
@@ -207,15 +213,19 @@ public class DatanodeSimulator implements Callable<Void> {
   private void backgroundStatsReporter() {
     long interval = getScmHeartbeatInterval(conf);
     final AtomicLong lastTotalHeartbeats = new AtomicLong(0);
-    final AtomicLong lastTotalReportedContainers = new AtomicLong(0);
+    final AtomicLong lastTotalFCRs = new AtomicLong(0);
+    final AtomicLong lastTotalICRs = new AtomicLong(0);
     final AtomicReference<Instant> lastCheck =
         new AtomicReference<>(Instant.now());
     heartbeatScheduler.scheduleAtFixedRate(() -> {
+
       long heartbeats = totalHeartbeats.get() - lastTotalHeartbeats.get();
       lastTotalHeartbeats.set(totalHeartbeats.get());
-      long reportedContainers = totalReportedContainers.get() -
-          lastTotalReportedContainers.get();
-      lastTotalReportedContainers.set(totalReportedContainers.get());
+      long fcrs = totalFCRs.get() - lastTotalFCRs.get();
+      lastTotalFCRs.set(totalFCRs.get());
+
+      long icrs = totalICRs.get() - lastTotalICRs.get();
+      lastTotalICRs.set(totalICRs.get());
 
       long intervalInSeconds = Instant.now().getEpochSecond()
           - lastCheck.get().getEpochSecond();
@@ -223,9 +233,11 @@ public class DatanodeSimulator implements Callable<Void> {
 
       LOGGER.info("Heartbeat status: \n" +
               "Total heartbeat in cycle: {} ({} per second) \n" +
-              "Total container reported in cycle: {} ({} per second)",
+              "Total incremental reported in cycle: {} ({} per second) \n" +
+              "Total full reported in cycle: {} ({} per second)",
           heartbeats, heartbeats / intervalInSeconds,
-          reportedContainers, reportedContainers / intervalInSeconds);
+          icrs, icrs / intervalInSeconds,
+          fcrs, fcrs / intervalInSeconds);
     }, interval, interval, TimeUnit.MILLISECONDS);
   }
 
@@ -235,8 +247,19 @@ public class DatanodeSimulator implements Callable<Void> {
     } else {
       datanodes = new ArrayList<>(datanodesCount);
     }
+
+    long containerReportInterval = conf.getTimeDuration(
+        HDDS_CONTAINER_REPORT_INTERVAL,
+        HDDS_CONTAINER_REPORT_INTERVAL_DEFAULT,
+        TimeUnit.MILLISECONDS);
+
+    List<InetSocketAddress> allEndpoints = new LinkedList<>(
+        scmClients.keySet());
+    allEndpoints.add(reconAddress);
+
     for (int i = datanodes.size(); i < datanodesCount; i++) {
-      datanodes.add(new DatanodeSimulationState(randomDatanodeDetails(conf)));
+      datanodes.add(new DatanodeSimulationState(randomDatanodeDetails(conf),
+          containerReportInterval, allEndpoints));
     }
 
     datanodesMap = new HashMap<>();
@@ -261,8 +284,7 @@ public class DatanodeSimulator implements Callable<Void> {
       for (DatanodeDetails datanode : cp.getPipeline().getNodeSet()) {
         if (datanodesMap.containsKey(datanode.getUuid())) {
           datanodesMap.get(datanode.getUuid())
-              .getContainers().put(cp.getContainerInfo().getContainerID(),
-                  ContainerReplicaProto.State.OPEN);
+              .newContainer(cp.getContainerInfo().getContainerID());
           totalAssignedContainers++;
         }
       }
@@ -286,18 +308,20 @@ public class DatanodeSimulator implements Callable<Void> {
 
     // Schedule heartbeat tasks for the given datanode to all SCMs/Recon.
     long scmHeartbeatInterval = HddsServerUtil.getScmHeartbeatInterval(conf);
-    for (StorageContainerDatanodeProtocol client : scmClients) {
+    for (Map.Entry<InetSocketAddress,
+        StorageContainerDatanodeProtocolClientSideTranslatorPB> entry :
+        scmClients.entrySet()) {
       // Use random initial delay as a jitter to avoid peaks.
-      long initialDelay = random.nextLong() % scmHeartbeatInterval;
-      Runnable runnable = () -> heartbeat(client, dn);
+      long initialDelay = RandomUtils.nextLong(0, scmHeartbeatInterval);
+      Runnable runnable = () -> heartbeat(entry.getKey(), entry.getValue(), dn);
       heartbeatScheduler.scheduleAtFixedRate(runnable, initialDelay,
           scmHeartbeatInterval, TimeUnit.MILLISECONDS);
     }
 
     long reconHeartbeatInterval =
         HddsServerUtil.getReconHeartbeatInterval(conf);
-    long initialDelay = random.nextLong() % reconHeartbeatInterval;
-    Runnable runnable = () -> heartbeat(reconClient, dn);
+    long initialDelay = RandomUtils.nextLong(0, reconHeartbeatInterval);
+    Runnable runnable = () -> heartbeat(reconAddress, reconClient, dn);
     heartbeatScheduler.scheduleAtFixedRate(runnable, initialDelay,
         reconHeartbeatInterval, TimeUnit.MILLISECONDS);
 
@@ -306,7 +330,7 @@ public class DatanodeSimulator implements Callable<Void> {
     return true;
   }
 
-  void storeDataNodesToFile() {
+  void saveDatanodesToFile() {
     File metaDirPath = ServerUtils.getOzoneMetaDirPath(conf);
     File file = new File(metaDirPath, "datanode-simulation.json");
     try (OutputStream os = Files.newOutputStream(file.toPath())) {
@@ -341,15 +365,20 @@ public class DatanodeSimulator implements Callable<Void> {
     }
   }
 
-  private void heartbeat(StorageContainerDatanodeProtocol client,
+  private void heartbeat(InetSocketAddress endpoint,
+                         StorageContainerDatanodeProtocol client,
                          DatanodeSimulationState dn) {
     try {
-      SCMHeartbeatRequestProto heartbeat = dn.heartbeatRequest(layoutInfo);
+      SCMHeartbeatRequestProto heartbeat = dn.heartbeatRequest(endpoint,
+          layoutInfo);
       SCMHeartbeatResponseProto response = client.sendHeartbeat(heartbeat);
       dn.ackHeartbeatResponse(response);
       totalHeartbeats.incrementAndGet();
-      totalReportedContainers.addAndGet(heartbeat
-          .getContainerReport().getReportsCount());
+      if (heartbeat.hasContainerReport()) {
+        totalFCRs.incrementAndGet();
+      } else {
+        totalICRs.addAndGet(heartbeat.getIncrementalContainerReportCount());
+      }
     } catch (Exception e) {
       LOGGER.info("Error sending heartbeat for {}: {}",
           dn.getDatanodeDetails().getUuidString(), e.getMessage());
@@ -359,12 +388,12 @@ public class DatanodeSimulator implements Callable<Void> {
   private void init() throws IOException {
     conf = freonCommand.createOzoneConfiguration();
     Collection<InetSocketAddress> addresses = getSCMAddressForDatanodes(conf);
-    scmClients = new ArrayList<>(addresses.size());
+    scmClients = new HashMap<>(addresses.size());
     for (InetSocketAddress address : addresses) {
-      scmClients.add(createScmClient(address));
+      scmClients.put(address, createScmClient(address));
     }
 
-    InetSocketAddress reconAddress = getReconAddresses(conf);
+    reconAddress = getReconAddresses(conf);
     reconClient = createReconClient(reconAddress);
 
     heartbeatScheduler = Executors.newScheduledThreadPool(threadCount);
@@ -401,12 +430,10 @@ public class DatanodeSimulator implements Callable<Void> {
     details.setPort(DatanodeDetails.Port.Name.STANDALONE, 0);
     details.setPort(DatanodeDetails.Port.Name.RATIS, 0);
     details.setPort(DatanodeDetails.Port.Name.REST, 0);
-    details.setVersion(
-        HddsVersionInfo.HDDS_VERSION_INFO.getVersion());
+    details.setVersion(HDDS_VERSION_INFO.getVersion());
     details.setSetupTime(Time.now());
-    details.setRevision(
-        HddsVersionInfo.HDDS_VERSION_INFO.getRevision());
-    details.setBuildDate(HddsVersionInfo.HDDS_VERSION_INFO.getDate());
+    details.setRevision(HDDS_VERSION_INFO.getRevision());
+    details.setBuildDate(HDDS_VERSION_INFO.getDate());
     details.setCurrentVersion(DatanodeVersion.CURRENT_VERSION);
     return details;
   }
@@ -423,7 +450,7 @@ public class DatanodeSimulator implements Callable<Void> {
         .newBuilder().build();
     boolean isRegistered = false;
 
-    for (StorageContainerDatanodeProtocol client : scmClients) {
+    for (StorageContainerDatanodeProtocol client : scmClients.values()) {
       try {
         SCMRegisteredResponseProto response =
             client.register(

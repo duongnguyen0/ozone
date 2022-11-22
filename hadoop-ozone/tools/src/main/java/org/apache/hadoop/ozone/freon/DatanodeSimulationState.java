@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
 import com.fasterxml.jackson.databind.ser.std.StdSerializer;
+import org.apache.commons.lang3.RandomUtils;
 import org.apache.hadoop.fs.StorageType;
 import org.apache.hadoop.hdds.conf.StorageUnit;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
@@ -15,24 +16,27 @@ import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.ContainerReplicaProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.ContainerReportsProto;
+import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.IncrementalContainerReportProto;
+import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.LayoutVersionProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.PipelineReportsProto;
+import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.SCMHeartbeatRequestProto;
+import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.SCMHeartbeatResponseProto;
 import org.apache.hadoop.ozone.container.common.impl.StorageLocationReport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Encapsulates states of a simulated datanode instance.
- * Thread-Unsafe: This is designed to be mutated in the context
- * of a single thread at a time (the heartbeat thread), except the list of
- * containers which can be modified by both heartbeat thread and container
- * growing thread.
  */
 class DatanodeSimulationState {
   private static final Logger LOGGER = LoggerFactory.getLogger(
@@ -41,23 +45,36 @@ class DatanodeSimulationState {
   private DatanodeDetails datanodeDetails;
   private boolean isRegistered = false;
   private Instant lastHeartbeat = Instant.MIN;
+  private Instant nextFullContainerReport = Instant.MIN;
+  private long fullContainerReportDurationMs;
+  private Map<InetSocketAddress, IncrementalContainerReportProto.Builder>
+      incrementalContainerReports = new HashMap<>();
+
   private Set<String> pipelines = new HashSet<>();
-  private Map<Long, ContainerReplicaProto.State>
-      containers =
-      new ConcurrentHashMap<>();
+  private Map<Long, ContainerReplicaProto.State> containers =
+      new HashMap<>();
+
 
   // indicate if this node is in read-only mode, no pipeline should be created.
   private volatile boolean readOnly = false;
 
-  DatanodeSimulationState(DatanodeDetails datanodeDetails) {
+  DatanodeSimulationState(DatanodeDetails datanodeDetails,
+                          long fullContainerReportDurationMs,
+                          List<InetSocketAddress> allEndpoints) {
+    this();
     this.datanodeDetails = datanodeDetails;
+    this.fullContainerReportDurationMs = fullContainerReportDurationMs;
+    for (InetSocketAddress endpoint : allEndpoints) {
+      incrementalContainerReports.put(endpoint,
+          IncrementalContainerReportProto.newBuilder());
+    }
   }
 
   public DatanodeSimulationState() {
   }
 
-  public void ackHeartbeatResponse(
-      StorageContainerDatanodeProtocolProtos.SCMHeartbeatResponseProto response) {
+  public synchronized void ackHeartbeatResponse(
+      SCMHeartbeatResponseProto response) {
     for (StorageContainerDatanodeProtocolProtos.SCMCommandProto command : response.getCommandsList()) {
       switch (command.getCommandType()) {
       case createPipelineCommand:
@@ -80,12 +97,7 @@ class DatanodeSimulationState {
       case closeContainerCommand:
         StorageContainerDatanodeProtocolProtos.CloseContainerCommandProto
             closeContainerCmd = command.getCloseContainerCommandProto();
-        if (containers.containsKey(closeContainerCmd.getContainerID())) {
-          containers.put(closeContainerCmd.getContainerID(),
-              ContainerReplicaProto.State.CLOSED);
-        } else {
-          LOGGER.error("Unrecognized closeContainerCommand");
-        }
+        closeContainer(closeContainerCmd.getContainerID());
         break;
       default:
         LOGGER.debug("Ignored command: {}",
@@ -95,21 +107,49 @@ class DatanodeSimulationState {
     this.lastHeartbeat = Instant.now();
   }
 
-  public StorageContainerDatanodeProtocolProtos.SCMHeartbeatRequestProto heartbeatRequest(
-      StorageContainerDatanodeProtocolProtos.LayoutVersionProto layoutInfo)
-      throws
-      IOException {
-    return
-        StorageContainerDatanodeProtocolProtos.SCMHeartbeatRequestProto.newBuilder()
+  public synchronized SCMHeartbeatRequestProto heartbeatRequest(
+      InetSocketAddress endpoint, LayoutVersionProto layoutInfo)
+      throws IOException {
+    SCMHeartbeatRequestProto.Builder builder =
+        SCMHeartbeatRequestProto.newBuilder()
             .setDatanodeDetails(datanodeDetails.getProtoBufMessage())
             .setDataNodeLayoutVersion(layoutInfo)
             .setNodeReport(createNodeReport())
-            .setPipelineReports(createPipelineReport())
-            .setContainerReport(createContainerReport())
-            .build();
+            .setPipelineReports(createPipelineReport());
+
+    addContainerReport(endpoint, builder);
+
+    return builder.build();
   }
 
-  private ContainerReportsProto createContainerReport() {
+
+  private void addContainerReport(InetSocketAddress endpoint,
+                                  SCMHeartbeatRequestProto.Builder builder) {
+    IncrementalContainerReportProto.Builder icr =
+        incrementalContainerReports.get(endpoint);
+    if (nextFullContainerReport.compareTo(Instant.now()) <= 0) {
+      builder.setContainerReport(createFullContainerReport());
+
+      // Every datanode will start with a full report, then the next full
+      // repport should be schedule randomly between 0 and the next true cycle
+      // to avoid peaks.
+      if (nextFullContainerReport == Instant.MIN) {
+        nextFullContainerReport = Instant.now().plusMillis(
+            RandomUtils.nextLong(1, fullContainerReportDurationMs));
+      } else {
+        nextFullContainerReport = Instant.now()
+            .plusMillis(fullContainerReportDurationMs);
+      }
+      icr.clear();
+    } else {
+      if (icr.getReportCount() > 0) {
+        builder.addIncrementalContainerReport(icr.build());
+        icr.clear();
+      }
+    }
+  }
+
+  private ContainerReportsProto createFullContainerReport() {
     ContainerReportsProto.Builder builder = ContainerReportsProto.newBuilder();
     for (Map.Entry<Long, ContainerReplicaProto.State> entry :
         containers.entrySet()) {
@@ -179,6 +219,54 @@ class DatanodeSimulationState {
         .addMetadataStorageReport(
             metaLocationReport.getMetadataProtoBufMessage())
         .build();
+  }
+
+  public synchronized void newContainer(long containerId) {
+    containers.put(containerId, ContainerReplicaProto.State.OPEN);
+    for (IncrementalContainerReportProto.Builder icr :
+        incrementalContainerReports.values()) {
+      icr.addReport(
+          ContainerReplicaProto.newBuilder()
+              .setContainerID(containerId)
+              .setReadCount(10_000)
+              .setWriteCount(10_000)
+              .setReadBytes(10_000_000L)
+              .setWriteBytes(5_000_000_000L)
+              .setKeyCount(10_000)
+              .setUsed(5_000_000_000L)
+              .setState(ContainerReplicaProto.State.OPEN)
+              .setBlockCommitSequenceId(1000)
+              .setOriginNodeId(datanodeDetails.getUuidString())
+              .setReplicaIndex(0)
+              .build()
+      );
+    }
+  }
+
+  public synchronized void closeContainer(Long containerID) {
+    if (containers.containsKey(containerID)) {
+      containers.put(containerID, ContainerReplicaProto.State.CLOSED);
+      for (IncrementalContainerReportProto.Builder icr :
+          incrementalContainerReports.values()) {
+        icr.addReport(
+            ContainerReplicaProto.newBuilder()
+                .setContainerID(containerID)
+                .setReadCount(10_000)
+                .setWriteCount(10_000)
+                .setReadBytes(10_000_000L)
+                .setWriteBytes(5_000_000_000L)
+                .setKeyCount(10_000)
+                .setUsed(5_000_000_000L)
+                .setState(ContainerReplicaProto.State.CLOSED)
+                .setBlockCommitSequenceId(1000)
+                .setOriginNodeId(datanodeDetails.getUuidString())
+                .setReplicaIndex(0)
+                .build()
+        );
+      }
+    } else {
+      LOGGER.error("Unrecognized closeContainerCommand");
+    }
   }
 
   @JsonSerialize(using = DatanodeDetailsSerializer.class)
