@@ -191,7 +191,7 @@ public class ContainerReportHandler extends AbstractContainerReportHandler
           processSingleReplica(datanodeDetails, container, replica, publisher);
         }
         StorageContainerManager.getMetrics()
-            .addContainersPerHeartbeat(replicas.size());
+            .addFullContainersReportSize(replicas.size());
         // Anything left in expectedContainersInDatanode was not in the full
         // report, so it is now missing on the DN. We need to remove it from the
         // list

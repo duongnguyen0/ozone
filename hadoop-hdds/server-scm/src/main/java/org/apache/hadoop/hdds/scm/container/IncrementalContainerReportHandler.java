@@ -29,6 +29,7 @@ import org.apache.hadoop.hdds.scm.node.NodeManager;
 import org.apache.hadoop.hdds.scm.node.states.NodeNotFoundException;
 import org.apache.hadoop.hdds.scm.server.SCMDatanodeHeartbeatDispatcher
     .IncrementalContainerReportFromDatanode;
+import org.apache.hadoop.hdds.scm.server.StorageContainerManager;
 import org.apache.hadoop.hdds.server.events.EventHandler;
 import org.apache.hadoop.hdds.server.events.EventPublisher;
 import org.apache.hadoop.ozone.common.statemachine.InvalidStateTransitionException;
@@ -111,6 +112,10 @@ public class IncrementalContainerReportHandler extends
               replicaProto.getContainerID(), e);
         }
       }
+
+      StorageContainerManager.getMetrics().addIncrementalContainersReportSize(
+          report.getReport().getReportList().size()
+      );
     }
 
     getContainerManager().notifyContainerReportProcessing(false, success);

@@ -56,7 +56,8 @@ public class SCMMetrics {
 
   @Metric private MutableRate heartbeatLatency;
   @Metric private MutableRate registerLatency;
-  @Metric private MutableRate containersPerHeartbeat;
+  @Metric private MutableRate fullContainersReportSize;
+  @Metric private MutableRate incrementalContainersReportSize;
 
   private DBCheckpointMetrics dbCheckpointMetrics;
 
@@ -138,8 +139,12 @@ public class SCMMetrics {
     registerLatency.add(latencyInNs);
   }
 
-  public void addContainersPerHeartbeat(long containersCount) {
-    containersPerHeartbeat.add(containersCount);
+  public void addFullContainersReportSize(long containersCount) {
+    fullContainersReportSize.add(containersCount);
+  }
+
+  public void addIncrementalContainersReportSize(long containersCount) {
+    incrementalContainersReportSize.add(containersCount);
   }
 
   public void setLastContainerStat(ContainerStat newStat) {
