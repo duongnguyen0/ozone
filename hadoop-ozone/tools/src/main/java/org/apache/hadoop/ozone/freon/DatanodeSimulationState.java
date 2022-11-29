@@ -19,6 +19,7 @@ import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolPro
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.IncrementalContainerReportProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.LayoutVersionProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.PipelineReportsProto;
+import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.SCMCommandProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.SCMHeartbeatRequestProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.SCMHeartbeatResponseProto;
 import org.apache.hadoop.ozone.container.common.impl.StorageLocationReport;
@@ -32,7 +33,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.Set;
 
 /**
@@ -41,14 +41,14 @@ import java.util.Set;
 class DatanodeSimulationState {
   private static final Logger LOGGER = LoggerFactory.getLogger(
       DatanodeSimulationState.class);
+  public static final long CONTAINER_SIZE = (long) StorageUnit.GB.toBytes(5);
+  private int targetContainersCount;
 
   private DatanodeDetails datanodeDetails;
   private boolean isRegistered = false;
-  private Instant lastHeartbeat = Instant.MIN;
-  private Instant nextFullContainerReport = Instant.MIN;
   private long fullContainerReportDurationMs;
-  private Map<InetSocketAddress, IncrementalContainerReportProto.Builder>
-      incrementalContainerReports = new HashMap<>();
+  private Map<InetSocketAddress, EndpointState> endpointStates =
+      new HashMap<>();
 
   private Set<String> pipelines = new HashSet<>();
   private Map<Long, ContainerReplicaProto.State> containers =
@@ -60,14 +60,15 @@ class DatanodeSimulationState {
 
   DatanodeSimulationState(DatanodeDetails datanodeDetails,
                           long fullContainerReportDurationMs,
-                          List<InetSocketAddress> allEndpoints) {
+                          List<InetSocketAddress> allEndpoints,
+                          int targetContainersCount) {
     this();
     this.datanodeDetails = datanodeDetails;
     this.fullContainerReportDurationMs = fullContainerReportDurationMs;
     for (InetSocketAddress endpoint : allEndpoints) {
-      incrementalContainerReports.put(endpoint,
-          IncrementalContainerReportProto.newBuilder());
+      endpointStates.put(endpoint, new EndpointState());
     }
+    this.targetContainersCount = targetContainersCount;
   }
 
   public DatanodeSimulationState() {
@@ -75,17 +76,16 @@ class DatanodeSimulationState {
 
   public synchronized void ackHeartbeatResponse(
       SCMHeartbeatResponseProto response) {
-    for (StorageContainerDatanodeProtocolProtos.SCMCommandProto command : response.getCommandsList()) {
+    for (SCMCommandProto command : response.getCommandsList()) {
       switch (command.getCommandType()) {
       case createPipelineCommand:
         StorageContainerDatanodeProtocolProtos.CreatePipelineCommandProto
             pipelineCmd =
             command.getCreatePipelineCommandProto();
-        if (pipelineCmd.getFactor() == HddsProtos.ReplicationFactor.ONE
-            && !readOnly) {
+        if (!readOnly) {
           pipelines.add(pipelineCmd.getPipelineID().getId());
         } else {
-          LOGGER.debug("Ignored pipeline creation for {}-{}",
+          LOGGER.info("Ignored pipeline creation for {}-{}",
               pipelineCmd.getType(), pipelineCmd.getFactor());
         }
         break;
@@ -104,7 +104,6 @@ class DatanodeSimulationState {
             command.getCommandType());
       }
     }
-    this.lastHeartbeat = Instant.now();
   }
 
   public synchronized SCMHeartbeatRequestProto heartbeatRequest(
@@ -122,29 +121,27 @@ class DatanodeSimulationState {
     return builder.build();
   }
 
-
   private void addContainerReport(InetSocketAddress endpoint,
                                   SCMHeartbeatRequestProto.Builder builder) {
-    IncrementalContainerReportProto.Builder icr =
-        incrementalContainerReports.get(endpoint);
-    if (nextFullContainerReport.compareTo(Instant.now()) <= 0) {
+    EndpointState state = endpointStates.get(endpoint);
+    if (state.nextFullContainerReport.compareTo(Instant.now()) <= 0) {
       builder.setContainerReport(createFullContainerReport());
 
       // Every datanode will start with a full report, then the next full
       // repport should be schedule randomly between 0 and the next true cycle
       // to avoid peaks.
-      if (nextFullContainerReport == Instant.MIN) {
-        nextFullContainerReport = Instant.now().plusMillis(
+      if (state.nextFullContainerReport == Instant.MIN) {
+        state.nextFullContainerReport = Instant.now().plusMillis(
             RandomUtils.nextLong(1, fullContainerReportDurationMs));
       } else {
-        nextFullContainerReport = Instant.now()
+        state.nextFullContainerReport = Instant.now()
             .plusMillis(fullContainerReportDurationMs);
       }
-      icr.clear();
+      state.icr.clear();
     } else {
-      if (icr.getReportCount() > 0) {
-        builder.addIncrementalContainerReport(icr.build());
-        icr.clear();
+      if (state.icr.getReportCount() > 0) {
+        builder.addIncrementalContainerReport(state.icr.build());
+        state.icr.clear();
       }
     }
   }
@@ -186,21 +183,17 @@ class DatanodeSimulationState {
 
   StorageContainerDatanodeProtocolProtos.NodeReportProto createNodeReport()
       throws IOException {
-    long capacity = (long) StorageUnit.TB.toBytes(200);
-    long used;
-    if (readOnly) {
-      used = capacity;
-    } else {
-      used = capacity / 2;
-    }
-    long remaining = capacity - used;
+    long capacity = targetContainersCount * CONTAINER_SIZE;
+    long used = readOnly ? capacity :
+        CONTAINER_SIZE * containers.size();
+
     StorageLocationReport storageLocationReport = StorageLocationReport
         .newBuilder()
         .setStorageLocation("/tmp/unreal_storage")
         .setId("simulated-storage-volume")
         .setCapacity(capacity)
         .setScmUsed(used)
-        .setRemaining(remaining)
+        .setRemaining(capacity - used)
         .setStorageType(StorageType.DEFAULT)
         .build();
 
@@ -223,9 +216,8 @@ class DatanodeSimulationState {
 
   public synchronized void newContainer(long containerId) {
     containers.put(containerId, ContainerReplicaProto.State.OPEN);
-    for (IncrementalContainerReportProto.Builder icr :
-        incrementalContainerReports.values()) {
-      icr.addReport(
+    for (EndpointState state : endpointStates.values()) {
+      state.icr.addReport(
           ContainerReplicaProto.newBuilder()
               .setContainerID(containerId)
               .setReadCount(10_000)
@@ -233,7 +225,7 @@ class DatanodeSimulationState {
               .setReadBytes(10_000_000L)
               .setWriteBytes(5_000_000_000L)
               .setKeyCount(10_000)
-              .setUsed(5_000_000_000L)
+              .setUsed(CONTAINER_SIZE)
               .setState(ContainerReplicaProto.State.OPEN)
               .setBlockCommitSequenceId(1000)
               .setOriginNodeId(datanodeDetails.getUuidString())
@@ -246,9 +238,8 @@ class DatanodeSimulationState {
   public synchronized void closeContainer(Long containerID) {
     if (containers.containsKey(containerID)) {
       containers.put(containerID, ContainerReplicaProto.State.CLOSED);
-      for (IncrementalContainerReportProto.Builder icr :
-          incrementalContainerReports.values()) {
-        icr.addReport(
+      for (EndpointState state : endpointStates.values()) {
+        state.icr.addReport(
             ContainerReplicaProto.newBuilder()
                 .setContainerID(containerID)
                 .setReadCount(10_000)
@@ -278,14 +269,6 @@ class DatanodeSimulationState {
   public void setDatanodeDetails(
       DatanodeDetails datanodeDetails) {
     this.datanodeDetails = datanodeDetails;
-  }
-
-  public Instant getLastHeartbeat() {
-    return lastHeartbeat;
-  }
-
-  public void setLastHeartbeat(Instant lastHeartbeat) {
-    this.lastHeartbeat = lastHeartbeat;
   }
 
   public Set<String> getPipelines() {
@@ -348,5 +331,12 @@ class DatanodeSimulationState {
       return DatanodeDetails.getFromProtoBuf(
           HddsProtos.DatanodeDetailsProto.parseFrom(binaryValue));
     }
+  }
+
+  private static class EndpointState {
+    private final IncrementalContainerReportProto.Builder icr =
+        IncrementalContainerReportProto.newBuilder();
+
+    private Instant nextFullContainerReport = Instant.MIN;
   }
 }

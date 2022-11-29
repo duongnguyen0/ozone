@@ -10,6 +10,8 @@ import org.apache.hadoop.hdds.cli.HddsVersionProvider;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
+import org.apache.hadoop.hdds.protocol.proto.HddsProtos.ReplicationFactor;
+import org.apache.hadoop.hdds.protocol.proto.HddsProtos.ReplicationType;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.ContainerReportsProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.LayoutVersionProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.NodeReportProto;
@@ -24,7 +26,6 @@ import org.apache.hadoop.hdds.server.ServerUtils;
 import org.apache.hadoop.hdds.upgrade.HDDSLayoutVersionManager;
 import org.apache.hadoop.hdds.utils.HAUtils;
 import org.apache.hadoop.hdds.utils.HddsServerUtil;
-import org.apache.hadoop.hdds.utils.HddsVersionInfo;
 import org.apache.hadoop.hdds.utils.LegacyHadoopConfigurationSource;
 import org.apache.hadoop.io.retry.RetryPolicies;
 import org.apache.hadoop.io.retry.RetryPolicy;
@@ -259,7 +260,7 @@ public class DatanodeSimulator implements Callable<Void> {
 
     for (int i = datanodes.size(); i < datanodesCount; i++) {
       datanodes.add(new DatanodeSimulationState(randomDatanodeDetails(conf),
-          containerReportInterval, allEndpoints));
+          containerReportInterval, allEndpoints, containers));
     }
 
     datanodesMap = new HashMap<>();
@@ -278,8 +279,8 @@ public class DatanodeSimulator implements Callable<Void> {
     LOGGER.info("Start to create containers.");
     while (totalAssignedContainers < totalExpectedContainers) {
       ContainerWithPipeline cp =
-          scmContainerClient.allocateContainer(HddsProtos.ReplicationType.RATIS,
-              HddsProtos.ReplicationFactor.ONE, "test");
+          scmContainerClient.allocateContainer(ReplicationType.RATIS,
+              ReplicationFactor.THREE, "test");
 
       for (DatanodeDetails datanode : cp.getPipeline().getNodeSet()) {
         if (datanodesMap.containsKey(datanode.getUuid())) {
