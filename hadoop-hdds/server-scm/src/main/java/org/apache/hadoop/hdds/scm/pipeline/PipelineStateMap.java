@@ -18,6 +18,7 @@
 package org.apache.hadoop.hdds.scm.pipeline;
 
 import com.google.common.base.Preconditions;
+import org.apache.commons.lang3.RandomUtils;
 import org.apache.hadoop.hdds.client.ReplicationConfig;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.scm.container.ContainerID;
@@ -426,4 +427,13 @@ class PipelineStateMap {
     return updatedPipeline;
   }
 
+  Pipeline getRandomOpenPipeline(ReplicationConfig replicationConfig) {
+    List<Pipeline> pipelines = query2OpenPipelines.getOrDefault(
+        replicationConfig, Collections.emptyList());
+    if (pipelines.isEmpty()) {
+      return null;
+    }
+
+    return pipelines.get(RandomUtils.nextInt(0, pipelines.size()));
+  }
 }

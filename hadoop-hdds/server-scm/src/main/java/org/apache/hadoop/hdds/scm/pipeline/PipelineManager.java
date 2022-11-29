@@ -26,6 +26,7 @@ import java.util.NavigableSet;
 import java.util.Set;
 import java.util.concurrent.TimeoutException;
 
+import org.apache.commons.lang3.RandomUtils;
 import org.apache.hadoop.hdds.client.ReplicationConfig;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.scm.container.ContainerID;
@@ -67,6 +68,16 @@ public interface PipelineManager extends Closeable, PipelineManagerMXBean {
   List<Pipeline> getPipelines(
       ReplicationConfig replicationConfig, Pipeline.PipelineState state
   );
+
+  default Pipeline getRandomOpenPipeline(ReplicationConfig replicationConfig) {
+    List<Pipeline> pipelines =
+        getPipelines(replicationConfig, Pipeline.PipelineState.OPEN);
+    if (pipelines.isEmpty()) {
+      return null;
+    }
+
+    return pipelines.get(RandomUtils.nextInt(0, pipelines.size()));
+  }
 
   List<Pipeline> getPipelines(
       ReplicationConfig replicationConfig,

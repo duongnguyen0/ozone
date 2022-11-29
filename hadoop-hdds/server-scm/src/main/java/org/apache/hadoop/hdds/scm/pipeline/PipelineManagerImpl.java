@@ -299,6 +299,11 @@ public class PipelineManagerImpl implements PipelineManager {
   }
 
   @Override
+  public Pipeline getRandomOpenPipeline(ReplicationConfig replicationConfig) {
+    return stateManager.getRandomOpenPipeline(replicationConfig);
+  }
+
+  @Override
   public List<Pipeline> getPipelines(
       ReplicationConfig replicationConfig,
       Pipeline.PipelineState state, Collection<DatanodeDetails> excludeDns,

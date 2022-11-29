@@ -209,6 +209,16 @@ public class PipelineStateManagerImpl implements PipelineStateManager {
   }
 
   @Override
+  public Pipeline getRandomOpenPipeline(ReplicationConfig replicationConfig) {
+    lock.readLock().lock();
+    try {
+      return pipelineStateMap.getRandomOpenPipeline(replicationConfig);
+    } finally {
+      lock.readLock().unlock();
+    }
+  }
+
+  @Override
   public NavigableSet<ContainerID> getContainers(PipelineID pipelineID)
       throws IOException {
     lock.readLock().lock();

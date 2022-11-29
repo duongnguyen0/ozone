@@ -209,14 +209,12 @@ public class ContainerManagerImpl implements ContainerManager {
     // mentioned in HDDS-5655.
     pipelineManager.acquireReadLock();
     lock.lock();
-    List<Pipeline> pipelines;
     Pipeline pipeline;
     ContainerInfo containerInfo = null;
     try {
-      pipelines = pipelineManager
-          .getPipelines(replicationConfig, Pipeline.PipelineState.OPEN);
-      if (!pipelines.isEmpty()) {
-        pipeline = pipelines.get(random.nextInt(pipelines.size()));
+      pipeline = pipelineManager
+          .getRandomOpenPipeline(replicationConfig);
+      if (pipeline != null) {
         containerInfo = createContainer(pipeline, owner);
       }
     } finally {
@@ -224,7 +222,7 @@ public class ContainerManagerImpl implements ContainerManager {
       pipelineManager.releaseReadLock();
     }
 
-    if (pipelines.isEmpty()) {
+    if (pipeline == null) {
       try {
         pipeline = pipelineManager.createPipeline(replicationConfig);
         pipelineManager.waitPipelineReady(pipeline.getId(), 0);
@@ -237,10 +235,9 @@ public class ContainerManagerImpl implements ContainerManager {
       pipelineManager.acquireReadLock();
       lock.lock();
       try {
-        pipelines = pipelineManager
-            .getPipelines(replicationConfig, Pipeline.PipelineState.OPEN);
-        if (!pipelines.isEmpty()) {
-          pipeline = pipelines.get(random.nextInt(pipelines.size()));
+        pipeline = pipelineManager
+            .getRandomOpenPipeline(replicationConfig);
+        if (pipeline != null) {
           containerInfo = createContainer(pipeline, owner);
         } else {
           throw new IOException("Could not allocate container. Cannot get any" +
