@@ -295,11 +295,11 @@ public class ReconContainerManager extends ContainerManagerImpl {
     // If replica doesn't exist in in-memory map, add to DB and add to map
     if (replicaLastSeenMap == null) {
       // putIfAbsent to avoid TOCTOU
-      replicaHistoryMap.putIfAbsent(id,
-          new ConcurrentHashMap<UUID, ContainerReplicaHistory>() {{
-            put(uuid, new ContainerReplicaHistory(uuid, currTime, currTime,
-                bcsId));
-          }});
+//      replicaHistoryMap.putIfAbsent(id,
+//          new ConcurrentHashMap<UUID, ContainerReplicaHistory>() {{
+//            put(uuid, new ContainerReplicaHistory(uuid, currTime, currTime,
+//                bcsId));
+//          }});
       flushToDB = true;
     } else {
       // ContainerID exists, update timestamp in memory
