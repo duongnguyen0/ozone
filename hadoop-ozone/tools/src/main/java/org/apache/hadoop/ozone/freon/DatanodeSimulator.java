@@ -16,6 +16,7 @@ import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolPro
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.LayoutVersionProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.NodeReportProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.PipelineReportsProto;
+import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.SCMCommandProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.SCMHeartbeatRequestProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.SCMHeartbeatResponseProto;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos.SCMRegisteredResponseProto;
@@ -379,6 +380,15 @@ public class DatanodeSimulator implements Callable<Void> {
         totalFCRs.incrementAndGet();
       } else {
         totalICRs.addAndGet(heartbeat.getIncrementalContainerReportCount());
+      }
+
+      if (response.getCommandsList().stream()
+          .anyMatch(x -> x.getCommandType() ==
+              SCMCommandProto.Type.reregisterCommand)) {
+        client.register(
+            dn.getDatanodeDetails().getExtendedProtoBufMessage(),
+            dn.createNodeReport(), dn.createFullContainerReport(),
+            dn.createPipelineReport(), this.layoutInfo);
       }
     } catch (Exception e) {
       LOGGER.info("Error sending heartbeat for {}: {}",

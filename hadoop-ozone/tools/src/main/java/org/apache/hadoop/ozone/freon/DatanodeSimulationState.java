@@ -146,7 +146,7 @@ class DatanodeSimulationState {
     }
   }
 
-  private ContainerReportsProto createFullContainerReport() {
+  ContainerReportsProto createFullContainerReport() {
     ContainerReportsProto.Builder builder = ContainerReportsProto.newBuilder();
     for (Map.Entry<Long, ContainerReplicaProto.State> entry :
         containers.entrySet()) {
@@ -169,7 +169,7 @@ class DatanodeSimulationState {
     return builder.build();
   }
 
-  private PipelineReportsProto createPipelineReport() {
+  PipelineReportsProto createPipelineReport() {
     PipelineReportsProto.Builder builder = PipelineReportsProto.newBuilder();
     for (String pipelineId : pipelines) {
       builder.addPipelineReport(
