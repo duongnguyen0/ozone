@@ -29,8 +29,9 @@ import static org.apache.hadoop.ozone.om.helpers.BucketLayout.OBJECT_STORE;
 /**
  * Handle locking logic foe key ops in OBS, FSO and Legacy buckets.
  */
-public class KeyLock {
-
+public final class KeyLock {
+  private KeyLock() {
+  }
 
   static LockHolder acquireWriteLock(OMMetadataManager metadataManager,
                                      KeyArgs keyArgs)
@@ -48,34 +49,39 @@ public class KeyLock {
       return ObsKeyLock.acquireObsWriteLock(metadataManager.getLock(),
           volume, bucket, keys);
     } else if (layout == FILE_SYSTEM_OPTIMIZED) {
-      return FsoKeyLock.acquireFsoWriteLock(metadataManager.getLock(), volume, bucket,
+      return FsoKeyLock.acquireFsoWriteLock(metadataManager.getLock(), volume,
+          bucket,
           keys);
     } else {
-      return LegacyKeyLock.acquireLegacyWriteLock(metadataManager.getLock(), volume, bucket,
+      return LegacyKeyLock.acquireLegacyWriteLock(metadataManager.getLock(),
+          volume, bucket,
           keys);
     }
   }
 
   static LockHolder acquireReadLock(OMMetadataManager metadataManager,
-                                     KeyArgs keyArgs)
+                                    KeyArgs keyArgs)
       throws IOException {
     return acquireReadLock(metadataManager, keyArgs.getVolumeName(),
         keyArgs.getBucketName(), keyArgs.getKeyName());
   }
 
   static LockHolder acquireReadLock(OMMetadataManager metadataManager,
-                                     String volume, String bucket,
-                                     String... keys)
+                                    String volume, String bucket,
+                                    String... keys)
       throws IOException {
     BucketLayout layout = getBucketLayout(metadataManager, volume, bucket);
     if (layout == OBJECT_STORE) {
-      return ObsKeyLock.acquireObsReadLock(metadataManager.getLock(), volume, bucket,
+      return ObsKeyLock.acquireObsReadLock(metadataManager.getLock(), volume,
+          bucket,
           keys);
     } else if (layout == FILE_SYSTEM_OPTIMIZED) {
-      return FsoKeyLock.acquireFsoReadLock(metadataManager.getLock(), volume, bucket,
+      return FsoKeyLock.acquireFsoReadLock(metadataManager.getLock(), volume,
+          bucket,
           keys);
     } else {
-      return LegacyKeyLock.acquireLegacyReadLock(metadataManager.getLock(), volume, bucket,
+      return LegacyKeyLock.acquireLegacyReadLock(metadataManager.getLock(),
+          volume, bucket,
           keys);
     }
   }

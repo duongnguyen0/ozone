@@ -25,14 +25,17 @@ import static org.apache.hadoop.ozone.om.lock.OzoneManagerLock.Resource.VOLUME_L
  * Encapsulate the locking logic for volume level ops, like create and modify
  * volumes.
  */
-public class VolumeLock {
+public final class VolumeLock {
+  private VolumeLock() {
+  }
 
   /**
    * Acquire lock for volume write scenarios.
+   *
    * @return a LockHolder that knows how to release the acquired lock.
    */
   static LockHolder acquireWriteLock(OzoneManagerLock ozoneManagerLock,
-                                   String volume) {
+                                     String volume) {
     boolean acquired = ozoneManagerLock.acquireWriteLock(VOLUME_LOCK, volume);
     verify(acquired, "Volume write lock can not be acquired");
     return () -> ozoneManagerLock.releaseWriteLock(VOLUME_LOCK, volume);
@@ -40,10 +43,11 @@ public class VolumeLock {
 
   /**
    * Acquire lock for volume read scenarios.
+   *
    * @return a LockHolder that knows how to release the acquired lock.
    */
   static LockHolder acquireReadLock(OzoneManagerLock ozoneManagerLock,
-                                     String volume) {
+                                    String volume) {
     boolean acquired = ozoneManagerLock.acquireReadLock(VOLUME_LOCK, volume);
     verify(acquired, "Volume read lock can not be acquired");
     return () -> ozoneManagerLock.releaseReadLock(VOLUME_LOCK, volume);

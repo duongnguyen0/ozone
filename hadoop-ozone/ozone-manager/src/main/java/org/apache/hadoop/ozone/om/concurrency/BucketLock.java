@@ -18,7 +18,6 @@ package org.apache.hadoop.ozone.om.concurrency;
 
 import org.apache.hadoop.ozone.om.lock.OzoneManagerLock;
 
-import static com.google.common.base.Verify.verify;
 import static org.apache.hadoop.ozone.om.lock.OzoneManagerLock.Resource.BUCKET_LOCK;
 import static org.apache.hadoop.ozone.om.lock.OzoneManagerLock.Resource.VOLUME_LOCK;
 
@@ -26,7 +25,7 @@ import static org.apache.hadoop.ozone.om.lock.OzoneManagerLock.Resource.VOLUME_L
  * Encapsulate the locking logic for bucket level ops, like create and modify
  * buckets.
  */
-public class BucketLock {
+public final class BucketLock {
   private BucketLock() {
   }
 

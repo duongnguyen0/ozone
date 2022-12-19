@@ -27,7 +27,7 @@ import static org.apache.hadoop.ozone.om.lock.OzoneManagerLock.Resource.KEY_PATH
  * Encapsulate the locking key level ops on OBS bucket, like create, delete
  * or rename keys.
  */
-public class ObsKeyLock {
+public final class ObsKeyLock {
   private ObsKeyLock() {
   }
 

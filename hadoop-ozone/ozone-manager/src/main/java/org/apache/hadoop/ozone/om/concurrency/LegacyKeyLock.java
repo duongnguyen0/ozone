@@ -24,7 +24,7 @@ import static org.apache.hadoop.ozone.om.lock.OzoneManagerLock.Resource.BUCKET_L
  * Encapsulate the locking key level ops on Legacy bucket, like create, delete
  * or rename keys.
  */
-public class LegacyKeyLock {
+public final class LegacyKeyLock {
   private LegacyKeyLock() {
   }
 
