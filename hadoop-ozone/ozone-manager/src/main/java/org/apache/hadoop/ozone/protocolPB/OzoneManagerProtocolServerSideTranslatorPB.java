@@ -29,6 +29,8 @@ import org.apache.hadoop.hdds.server.OzoneProtocolMessageDispatcher;
 import org.apache.hadoop.hdds.tracing.TracingUtil;
 import org.apache.hadoop.hdds.utils.ProtocolMessageMetrics;
 import org.apache.hadoop.ozone.OmUtils;
+import org.apache.hadoop.ozone.om.concurrency.LockHolder;
+import org.apache.hadoop.ozone.om.concurrency.OmConcurrencyController;
 import org.apache.hadoop.ozone.om.OzoneManager;
 import org.apache.hadoop.ozone.om.exceptions.OMException;
 import org.apache.hadoop.ozone.om.exceptions.OMLeaderNotReadyException;
@@ -51,6 +53,7 @@ import com.google.protobuf.ServiceException;
 import org.apache.hadoop.ozone.security.S3SecurityUtil;
 import org.apache.ratis.protocol.RaftPeerId;
 import org.apache.ratis.util.ExitUtils;
+import org.apache.ratis.util.function.CheckedSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -63,9 +66,9 @@ public class OzoneManagerProtocolServerSideTranslatorPB implements
     OzoneManagerProtocolPB {
   private static final Logger LOG = LoggerFactory
       .getLogger(OzoneManagerProtocolServerSideTranslatorPB.class);
-  private static final String OM_REQUESTS_PACKAGE = 
+  private static final String OM_REQUESTS_PACKAGE =
       "org.apache.hadoop.ozone";
-  
+
   private final OzoneManagerRatisServer omRatisServer;
   private final RequestHandler handler;
   private final boolean isRatisEnabled;
@@ -75,6 +78,7 @@ public class OzoneManagerProtocolServerSideTranslatorPB implements
   private final OzoneProtocolMessageDispatcher<OMRequest, OMResponse,
       ProtocolMessageEnum> dispatcher;
   private final RequestValidations requestValidations;
+  private final OmConcurrencyController concurrencyController;
 
   /**
    * Constructs an instance of the server handler.
@@ -125,6 +129,9 @@ public class OzoneManagerProtocolServerSideTranslatorPB implements
                 ValidationContext.of(ozoneManager.getVersionManager(),
                     ozoneManager.getMetadataManager()))
             .load();
+
+    this.concurrencyController = new OmConcurrencyController(
+        ozoneManager.getMetadataManager());
   }
 
   /**
@@ -132,7 +139,7 @@ public class OzoneManagerProtocolServerSideTranslatorPB implements
    */
   @Override
   public OMResponse submitRequest(RpcController controller,
-      OMRequest request) throws ServiceException {
+                                  OMRequest request) throws ServiceException {
     OMRequest validatedRequest;
     try {
       validatedRequest = requestValidations.validateRequest(request);
@@ -143,10 +150,10 @@ public class OzoneManagerProtocolServerSideTranslatorPB implements
       throw new ServiceException(e);
     }
 
-    OMResponse response = 
+    OMResponse response =
         dispatcher.processRequest(validatedRequest, this::processRequest,
-        request.getCmdType(), request.getTraceID());
-    
+            request.getCmdType(), request.getTraceID());
+
     return requestValidations.validateResponse(request, response);
   }
 
@@ -172,7 +179,7 @@ public class OzoneManagerProtocolServerSideTranslatorPB implements
       if (isRatisEnabled) {
         // Check if the request is a read only request
         if (OmUtils.isReadOnly(request)) {
-          return submitReadRequestToOM(request);
+          return runInLock(request, () -> handler.handleReadRequest(request));
         } else {
           // To validate credentials we have already verified leader status.
           // This will skip of checking leader status again if request has
@@ -180,6 +187,7 @@ public class OzoneManagerProtocolServerSideTranslatorPB implements
           if (!s3Auth) {
             OzoneManagerRatisUtils.checkLeaderStatus(ozoneManager);
           }
+          OMRequest preprocessedRequest;
           try {
             omClientRequest =
                 createClientRequest(request, ozoneManager);
@@ -187,7 +195,7 @@ public class OzoneManagerProtocolServerSideTranslatorPB implements
             //  return null, which triggered the findbugs warning.
             //  Added the assertion.
             assert (omClientRequest != null);
-            request = omClientRequest.preExecute(ozoneManager);
+            preprocessedRequest = omClientRequest.preExecute(ozoneManager);
           } catch (IOException ex) {
             // As some of the preExecute returns error. So handle here.
             if (omClientRequest != null) {
@@ -195,17 +203,35 @@ public class OzoneManagerProtocolServerSideTranslatorPB implements
             }
             return createErrorResponse(request, ex);
           }
-          OMResponse response = submitRequestToRatis(request);
+          OMResponse response = runInLock(request,
+              () -> submitRequestToRatis(preprocessedRequest));
           if (!response.getSuccess()) {
             omClientRequest.handleRequestFailure(ozoneManager);
           }
           return response;
         }
       } else {
-        return submitRequestDirectlyToOM(request);
+        return runInLock(request, () -> submitRequestDirectlyToOM(request));
       }
     } finally {
       OzoneManager.setS3Auth(null);
+    }
+  }
+
+  private OMResponse runInLock(OMRequest request,
+                      CheckedSupplier<OMResponse, ServiceException> supplier)
+      throws ServiceException {
+    if (isRatisEnabled) {
+      // When in ratis mode, all requests, read or write, need to be handled from leader
+      // perspective.
+      validateLeaderStatus(request);
+    }
+    try (LockHolder ignored = concurrencyController.acquireLeaderLock(request)) {
+      // TODO: revalidate leader status, e.g. after waiting for the lock
+      // leader may already change.
+      return supplier.get();
+    } catch (IOException e) {
+      return createErrorResponse(request, e);
     }
   }
 
@@ -217,14 +243,10 @@ public class OzoneManagerProtocolServerSideTranslatorPB implements
     return omRatisServer.submitRequest(request);
   }
 
-  private OMResponse submitReadRequestToOM(OMRequest request)
-      throws ServiceException {
-    // Check if this OM is the leader.
+  private void validateLeaderStatus(OMRequest request) throws ServiceException {
     RaftServerStatus raftServerStatus = omRatisServer.checkLeaderStatus();
-    if (raftServerStatus == LEADER_AND_READY ||
-        request.getCmdType().equals(PrepareStatus)) {
-      return handler.handleReadRequest(request);
-    } else {
+    if (raftServerStatus != LEADER_AND_READY
+        && !request.getCmdType().equals(PrepareStatus)) {
       throw createLeaderErrorException(raftServerStatus);
     }
   }
