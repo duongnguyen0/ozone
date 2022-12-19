@@ -121,7 +121,6 @@ public class OMKeyDeleteRequest extends OMKeyRequest {
         OmResponseUtil.getOMResponseBuilder(getOmRequest());
     OMMetadataManager omMetadataManager = ozoneManager.getMetadataManager();
     IOException exception = null;
-    boolean acquiredLock = false;
     OMClientResponse omClientResponse = null;
     Result result = null;
     OmBucketInfo omBucketInfo =
@@ -139,9 +138,6 @@ public class OMKeyDeleteRequest extends OMKeyRequest {
 
       String objectKey =
           omMetadataManager.getOzoneKey(volumeName, bucketName, keyName);
-
-      acquiredLock = omMetadataManager.getLock()
-          .acquireWriteLock(BUCKET_LOCK, volumeName, bucketName);
 
       // Validate bucket and volume exists or not.
       validateBucketAndVolume(omMetadataManager, volumeName, bucketName);
@@ -187,10 +183,6 @@ public class OMKeyDeleteRequest extends OMKeyRequest {
     } finally {
       addResponseToDoubleBuffer(trxnLogIndex, omClientResponse,
           omDoubleBufferHelper);
-      if (acquiredLock) {
-        omMetadataManager.getLock()
-            .releaseWriteLock(BUCKET_LOCK, volumeName, bucketName);
-      }
     }
 
     // Performing audit logging outside of the lock.

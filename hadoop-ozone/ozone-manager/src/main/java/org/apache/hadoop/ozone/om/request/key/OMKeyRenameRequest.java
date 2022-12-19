@@ -138,7 +138,6 @@ public class OMKeyRenameRequest extends OMKeyRequest {
         getOmRequest());
 
     OMMetadataManager omMetadataManager = ozoneManager.getMetadataManager();
-    boolean acquiredLock = false;
     OMClientResponse omClientResponse = null;
     IOException exception = null;
     OmKeyInfo fromKeyValue = null;
@@ -160,9 +159,6 @@ public class OMKeyRenameRequest extends OMKeyRequest {
           IAccessAuthorizer.ACLType.DELETE, OzoneObj.ResourceType.KEY);
       checkKeyAcls(ozoneManager, volumeName, bucketName, toKeyName,
           IAccessAuthorizer.ACLType.CREATE, OzoneObj.ResourceType.KEY);
-
-      acquiredLock = omMetadataManager.getLock().acquireWriteLock(BUCKET_LOCK,
-          volumeName, bucketName);
 
       // Validate bucket and volume exists or not.
       validateBucketAndVolume(omMetadataManager, volumeName, bucketName);
@@ -219,10 +215,6 @@ public class OMKeyRenameRequest extends OMKeyRequest {
     } finally {
       addResponseToDoubleBuffer(trxnLogIndex, omClientResponse,
             omDoubleBufferHelper);
-      if (acquiredLock) {
-        omMetadataManager.getLock().releaseWriteLock(BUCKET_LOCK, volumeName,
-            bucketName);
-      }
     }
 
     auditLog(auditLogger, buildAuditMessage(OMAction.RENAME_KEY, auditMap,

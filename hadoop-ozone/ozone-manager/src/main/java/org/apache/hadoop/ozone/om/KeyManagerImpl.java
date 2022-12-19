@@ -352,8 +352,6 @@ public class KeyManagerImpl implements KeyManager {
     String volumeName = args.getVolumeName();
     String bucketName = args.getBucketName();
     String keyName = args.getKeyName();
-    metadataManager.getLock().acquireReadLock(BUCKET_LOCK, volumeName,
-        bucketName);
 
     BucketLayout bucketLayout =
         getBucketLayout(metadataManager, args.getVolumeName(),
@@ -378,9 +376,6 @@ public class KeyManagerImpl implements KeyManager {
                 bucketName, keyName, ex);
       }
       throw new OMException(ex.getMessage(), KEY_NOT_FOUND);
-    } finally {
-      metadataManager.getLock().releaseReadLock(BUCKET_LOCK, volumeName,
-          bucketName);
     }
 
     if (value == null) {
