@@ -25,6 +25,9 @@ import static org.apache.hadoop.ozone.om.lock.OzoneManagerLock.Resource.BUCKET_L
  * or rename keys.
  */
 public class LegacyKeyLock {
+  private LegacyKeyLock() {
+  }
+
   /**
    * Acquire a lock for Legacy key write scenarios.
    */
@@ -41,8 +44,8 @@ public class LegacyKeyLock {
    * Acquire a lock for Legacy key write scenarios.
    */
   static LockHolder acquireLegacyReadLock(OzoneManagerLock lock,
-                                           String volume, String bucket,
-                                           String... keys) {
+                                          String volume, String bucket,
+                                          String... keys) {
     // For legacy, we don't optimize to use fine-grained lock, still
     // serialize requests for same bucket.
     lock.acquireReadLock(BUCKET_LOCK, volume, bucket);

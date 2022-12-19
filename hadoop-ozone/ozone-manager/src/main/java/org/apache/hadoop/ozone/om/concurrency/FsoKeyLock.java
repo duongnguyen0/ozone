@@ -25,6 +25,8 @@ import static org.apache.hadoop.ozone.om.lock.OzoneManagerLock.Resource.BUCKET_L
  * or rename keys.
  */
 public class FsoKeyLock {
+  private FsoKeyLock() {
+  }
 
   /**
    * Acquire a lock for FSO key write scenarios.
@@ -41,8 +43,8 @@ public class FsoKeyLock {
    * Acquire a lock for FSO key write scenarios.
    */
   static LockHolder acquireFsoReadLock(OzoneManagerLock lock,
-                                        String volume, String bucket,
-                                        String... ignoredKeys) {
+                                       String volume, String bucket,
+                                       String... ignoredKeys) {
     // TODO: optimize to use fine-grained lock for FSO.
     lock.acquireReadLock(BUCKET_LOCK, volume, bucket);
     return () -> lock.acquireReadLock(BUCKET_LOCK, volume, bucket);

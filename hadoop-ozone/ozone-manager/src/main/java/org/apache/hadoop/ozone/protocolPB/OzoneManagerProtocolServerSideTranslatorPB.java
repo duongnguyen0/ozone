@@ -222,11 +222,12 @@ public class OzoneManagerProtocolServerSideTranslatorPB implements
                       CheckedSupplier<OMResponse, ServiceException> supplier)
       throws ServiceException {
     if (isRatisEnabled) {
-      // When in ratis mode, all requests, read or write, need to be handled from leader
-      // perspective.
+      // When in ratis mode, all requests, read or write, need to be handled
+      // from leader perspective.
       validateLeaderStatus(request);
     }
-    try (LockHolder ignored = concurrencyController.acquireLeaderLock(request)) {
+    try (LockHolder ignored =
+             concurrencyController.acquireLeaderLock(request)) {
       // TODO: revalidate leader status, e.g. after waiting for the lock
       // leader may already change.
       return supplier.get();

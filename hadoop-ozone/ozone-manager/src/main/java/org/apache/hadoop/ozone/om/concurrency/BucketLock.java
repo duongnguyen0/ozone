@@ -27,6 +27,8 @@ import static org.apache.hadoop.ozone.om.lock.OzoneManagerLock.Resource.VOLUME_L
  * buckets.
  */
 public class BucketLock {
+  private BucketLock() {
+  }
 
   /**
    * Acquire lock for bucket write scenarios.

@@ -28,6 +28,9 @@ import static org.apache.hadoop.ozone.om.lock.OzoneManagerLock.Resource.KEY_PATH
  * or rename keys.
  */
 public class ObsKeyLock {
+  private ObsKeyLock() {
+  }
+
   /**
    * Acquire a lock for OBS key write scenarios.
    */
@@ -51,8 +54,8 @@ public class ObsKeyLock {
   }
 
   static LockHolder acquireObsReadLock(OzoneManagerLock lock,
-                                        String volume, String bucket,
-                                        String... keys) {
+                                       String volume, String bucket,
+                                       String... keys) {
     lock.acquireReadLock(BUCKET_LOCK, volume, bucket);
     // Always lock keys in alphabetical order to avoid deadlocks.
     if (keys.length > 1) {
