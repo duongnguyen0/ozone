@@ -19,7 +19,12 @@ package org.apache.hadoop.ozone.om;
 import org.apache.hadoop.metrics2.MetricsSystem;
 import org.apache.hadoop.metrics2.annotation.Metric;
 import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
+import org.apache.hadoop.metrics2.lib.MetricsRegistry;
 import org.apache.hadoop.metrics2.lib.MutableRate;
+import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos.Type;
+
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Including OM performance related metrics.
@@ -83,6 +88,25 @@ public class OMPerformanceMetrics {
   @Metric(about = "Client requests forcing container info cache refresh")
   private MutableRate forceContainerCacheRefresh;
 
+  @Metric(about = "Latency of S3 secret validation.")
+  private MutableRate validateS3SecretLatencyNs;
+  @Metric(about = "Latency of prevalidation.")
+  private MutableRate preValidationLatencyNs;
+  @Metric(about = "Latency of postvalidation.")
+  private MutableRate postValidationLatencyNs;
+
+  private final MetricsRegistry registry;
+  private Map<Type, MutableRate> opsLatency = new HashMap<>();
+
+  private OMPerformanceMetrics() {
+    this.registry = new MetricsRegistry(SOURCE_NAME);
+    for (Type type : Type.values()) {
+      opsLatency.put(type, registry.newRate(
+          type.name() + "Latency",
+              type + " latency in ns"));
+    }
+  }
+
 
   public void addLookupLatency(long latencyInNs) {
     lookupLatencyNs.add(latencyInNs);
@@ -139,5 +163,21 @@ public class OMPerformanceMetrics {
 
   public void setForceContainerCacheRefresh(boolean value) {
     forceContainerCacheRefresh.add(value ? 1L : 0L);
+  }
+
+  public MutableRate getOpsLatency(Type opsType) {
+    return opsLatency.get(opsType);
+  }
+
+  public MutableRate getValidateS3SecretLatencyNs() {
+    return validateS3SecretLatencyNs;
+  }
+
+  public MutableRate getPreValidationLatencyNs() {
+    return preValidationLatencyNs;
+  }
+
+  public MutableRate getPostValidationLatencyNs() {
+    return postValidationLatencyNs;
   }
 }

@@ -1464,6 +1464,10 @@ public final class OzoneManager extends ServiceRuntimeInfoImpl
     return metrics;
   }
 
+  public OMPerformanceMetrics getPerfMetrics() {
+    return perfMetrics;
+  }
+
   /**
    * Start service.
    */

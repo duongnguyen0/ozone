@@ -49,6 +49,7 @@ import com.google.protobuf.ProtocolMessageEnum;
 import com.google.protobuf.RpcController;
 import com.google.protobuf.ServiceException;
 import org.apache.hadoop.ozone.security.S3SecurityUtil;
+import org.apache.hadoop.util.Time;
 import org.apache.ratis.protocol.RaftPeerId;
 import org.apache.ratis.util.ExitUtils;
 import org.slf4j.Logger;
@@ -134,20 +135,36 @@ public class OzoneManagerProtocolServerSideTranslatorPB implements
   public OMResponse submitRequest(RpcController controller,
       OMRequest request) throws ServiceException {
     OMRequest validatedRequest;
+    long start = Time.monotonicNowNanos();
+    long startPostValidation = 0;
     try {
-      validatedRequest = requestValidations.validateRequest(request);
-    } catch (Exception e) {
-      if (e instanceof OMException) {
-        return createErrorResponse(request, (OMException) e);
+      try {
+        validatedRequest = requestValidations.validateRequest(request);
+      } catch (Exception e) {
+        if (e instanceof OMException) {
+          return createErrorResponse(request, (OMException) e);
+        }
+        throw new ServiceException(e);
+      } finally {
+        ozoneManager.getPerfMetrics().getPreValidationLatencyNs().add(
+            Time.monotonicNowNanos() - start
+        );
       }
-      throw new ServiceException(e);
-    }
 
-    OMResponse response = 
-        dispatcher.processRequest(validatedRequest, this::processRequest,
-        request.getCmdType(), request.getTraceID());
-    
-    return requestValidations.validateResponse(request, response);
+      OMResponse response =
+          dispatcher.processRequest(validatedRequest,
+              this::processRequest,
+              request.getCmdType(), request.getTraceID());
+
+      startPostValidation = Time.monotonicNowNanos();
+      return requestValidations.validateResponse(request, response);
+    } finally {
+      ozoneManager.getPerfMetrics().getPostValidationLatencyNs().add(
+          Time.monotonicNowNanos() - startPostValidation
+      );
+      ozoneManager.getPerfMetrics().getOpsLatency(request.getCmdType())
+          .add(Time.monotonicNowNanos() - start);
+    }
   }
 
   private OMResponse processRequest(OMRequest request) throws
@@ -163,7 +180,10 @@ public class OzoneManagerProtocolServerSideTranslatorPB implements
           // If Request has S3Authentication validate S3 credentials
           // if current OM is leader and then proceed with
           // processing the request.
+          long start = Time.monotonicNowNanos();
           S3SecurityUtil.validateS3Credential(request, ozoneManager);
+          ozoneManager.getPerfMetrics().getValidateS3SecretLatencyNs()
+              .add(Time.monotonicNowNanos() - start);
         } catch (IOException ex) {
           // If validate credentials fail return error OM Response.
           return createErrorResponse(request, ex);
