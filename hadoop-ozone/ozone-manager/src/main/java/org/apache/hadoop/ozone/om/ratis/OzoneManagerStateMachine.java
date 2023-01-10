@@ -91,7 +91,7 @@ public class OzoneManagerStateMachine extends BaseStateMachine {
   private RaftGroupId raftGroupId;
   private OzoneManagerDoubleBuffer ozoneManagerDoubleBuffer;
   private final RatisSnapshotInfo snapshotInfo;
-  private final ExecutorService executorService;
+  private final ExecutorService[] executorServices;
   private final ExecutorService installSnapshotExecutor;
   private final boolean isTracingEnabled;
   private final AtomicInteger statePausedCount = new AtomicInteger(0);
@@ -124,7 +124,10 @@ public class OzoneManagerStateMachine extends BaseStateMachine {
 
     ThreadFactory build = new ThreadFactoryBuilder().setDaemon(true)
         .setNameFormat("OM StateMachine ApplyTransaction Thread - %d").build();
-    this.executorService = HadoopExecutors.newSingleThreadExecutor(build);
+    this.executorServices = new ExecutorService[10];
+    for (int i = 0; i < 10; i++) {
+      executorServices[i] = HadoopExecutors.newSingleThreadExecutor(build);
+    }
     this.installSnapshotExecutor = HadoopExecutors.newSingleThreadExecutor();
   }
 
@@ -321,7 +324,8 @@ public class OzoneManagerStateMachine extends BaseStateMachine {
       ozoneManagerDoubleBuffer.acquireUnFlushedTransactions(1);
 
       CompletableFuture<OMResponse> future = CompletableFuture.supplyAsync(
-          () -> runCommand(request, trxLogIndex), executorService);
+          () -> runCommand(request, trxLogIndex),
+          executorServices[(int) (trxLogIndex % 10)]);
       future.thenApply(omResponse -> {
         if (!omResponse.getSuccess()) {
           // When INTERNAL_ERROR or METADATA_ERROR it is considered as
@@ -666,7 +670,7 @@ public class OzoneManagerStateMachine extends BaseStateMachine {
 
   public void stop() {
     ozoneManagerDoubleBuffer.stop();
-    HadoopExecutors.shutdown(executorService, LOG, 5, TimeUnit.SECONDS);
+    HadoopExecutors.shutdown(executorServices[0], LOG, 5, TimeUnit.SECONDS);
     HadoopExecutors.shutdown(installSnapshotExecutor, LOG, 5, TimeUnit.SECONDS);
   }
 
