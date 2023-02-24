@@ -17,26 +17,9 @@
  */
 package org.apache.hadoop.ozone;
 
-import java.io.ByteArrayInputStream;
-import java.io.DataInputStream;
-import java.io.File;
-import java.io.IOException;
-import java.net.InetAddress;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.security.KeyPair;
-import java.security.cert.CertificateExpiredException;
-import java.security.cert.X509Certificate;
-import java.time.Duration;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
-import java.util.Date;
-import java.util.Properties;
-import java.util.UUID;
-import java.util.concurrent.Callable;
-
+import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.RandomStringUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.hdds.annotation.InterfaceAudience;
 import org.apache.hadoop.hdds.conf.DefaultConfigManager;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
@@ -44,23 +27,19 @@ import org.apache.hadoop.hdds.protocol.SCMSecurityProtocol;
 import org.apache.hadoop.hdds.protocol.proto.SCMSecurityProtocolProtos;
 import org.apache.hadoop.hdds.protocol.proto.SCMSecurityProtocolProtos.SCMGetCertResponseProto;
 import org.apache.hadoop.hdds.protocolPB.SCMSecurityProtocolClientSideTranslatorPB;
+import org.apache.hadoop.hdds.scm.HddsTestUtils;
 import org.apache.hadoop.hdds.scm.ScmConfig;
 import org.apache.hadoop.hdds.scm.ScmConfigKeys;
 import org.apache.hadoop.hdds.scm.ScmInfo;
-import org.apache.hadoop.hdds.scm.HddsTestUtils;
-import org.apache.hadoop.hdds.scm.container.ContainerID;
 import org.apache.hadoop.hdds.scm.ha.HASecurityUtils;
 import org.apache.hadoop.hdds.scm.ha.SCMHANodeDetails;
 import org.apache.hadoop.hdds.scm.ha.SCMHAUtils;
 import org.apache.hadoop.hdds.scm.ha.SCMRatisServerImpl;
 import org.apache.hadoop.hdds.scm.protocol.StorageContainerLocationProtocol;
-import org.apache.hadoop.hdds.scm.protocolPB.StorageContainerLocationProtocolClientSideTranslatorPB;
-import org.apache.hadoop.hdds.scm.proxy.SCMContainerLocationFailoverProxyProvider;
 import org.apache.hadoop.hdds.scm.server.SCMHTTPServerConfig;
 import org.apache.hadoop.hdds.scm.server.SCMStorageConfig;
 import org.apache.hadoop.hdds.scm.server.StorageContainerManager;
 import org.apache.hadoop.hdds.security.exception.SCMSecurityException;
-import org.apache.hadoop.hdds.security.token.ContainerTokenIdentifier;
 import org.apache.hadoop.hdds.security.x509.SecurityConfig;
 import org.apache.hadoop.hdds.security.x509.certificate.client.DNCertificateClient;
 import org.apache.hadoop.hdds.security.x509.certificate.utils.CertificateCodec;
@@ -97,15 +76,46 @@ import org.apache.hadoop.security.token.Token;
 import org.apache.ozone.test.GenericTestUtils;
 import org.apache.ozone.test.GenericTestUtils.LogCapturer;
 import org.apache.ozone.test.LambdaTestUtils;
+import org.apache.ratis.protocol.ClientId;
+import org.apache.ratis.util.ExitUtils;
+import org.bouncycastle.asn1.x500.RDN;
+import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.asn1.x500.style.BCStyle;
+import org.bouncycastle.cert.X509CertificateHolder;
+import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
+import org.junit.After;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Ignore;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
+import org.junit.rules.Timeout;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.apache.commons.io.IOUtils;
-import org.apache.commons.lang3.RandomStringUtils;
-import org.apache.commons.lang3.StringUtils;
+import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
+import java.io.File;
+import java.io.IOException;
+import java.net.InetAddress;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.security.KeyPair;
+import java.security.cert.CertificateExpiredException;
+import java.security.cert.X509Certificate;
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.Date;
+import java.util.Properties;
+import java.util.UUID;
+import java.util.concurrent.Callable;
+
 import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTHENTICATION;
-import static org.apache.hadoop.hdds.HddsConfigKeys.HDDS_BLOCK_TOKEN_EXPIRY_TIME;
-import static org.apache.hadoop.hdds.HddsConfigKeys.HDDS_CONTAINER_TOKEN_ENABLED;
 import static org.apache.hadoop.hdds.HddsConfigKeys.HDDS_X509_DEFAULT_DURATION;
-import static org.apache.hadoop.hdds.HddsConfigKeys.HDDS_X509_MAX_DURATION;
 import static org.apache.hadoop.hdds.HddsConfigKeys.HDDS_X509_RENEW_GRACE_DURATION;
 import static org.apache.hadoop.hdds.HddsConfigKeys.OZONE_METADATA_DIRS;
 import static org.apache.hadoop.hdds.scm.ScmConfig.ConfigStrings.HDDS_SCM_KERBEROS_KEYTAB_FILE_KEY;
@@ -127,21 +137,13 @@ import static org.apache.hadoop.net.ServerSocketUtil.getPort;
 import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_ADMINISTRATORS;
 import static org.apache.hadoop.ozone.OzoneConfigKeys.OZONE_SECURITY_ENABLED_KEY;
 import static org.apache.hadoop.ozone.om.OMConfigKeys.DELEGATION_TOKEN_MAX_LIFETIME_KEY;
+import static org.apache.hadoop.ozone.om.OMConfigKeys.OZONE_OM_ADDRESS_KEY;
 import static org.apache.hadoop.ozone.om.OMConfigKeys.OZONE_OM_HTTP_KERBEROS_KEYTAB_FILE;
 import static org.apache.hadoop.ozone.om.OMConfigKeys.OZONE_OM_HTTP_KERBEROS_PRINCIPAL_KEY;
 import static org.apache.hadoop.ozone.om.OMConfigKeys.OZONE_OM_KERBEROS_KEYTAB_FILE_KEY;
 import static org.apache.hadoop.ozone.om.OMConfigKeys.OZONE_OM_KERBEROS_PRINCIPAL_KEY;
-import static org.apache.hadoop.ozone.om.OMConfigKeys.OZONE_OM_ADDRESS_KEY;
 import static org.apache.hadoop.ozone.om.exceptions.OMException.ResultCodes.TOKEN_EXPIRED;
 import static org.apache.hadoop.security.UserGroupInformation.AuthenticationMethod.KERBEROS;
-import org.apache.ratis.protocol.ClientId;
-import org.apache.ratis.util.ExitUtils;
-import org.bouncycastle.asn1.x500.RDN;
-import org.bouncycastle.asn1.x500.X500Name;
-import org.bouncycastle.asn1.x500.style.BCStyle;
-import org.bouncycastle.cert.X509CertificateHolder;
-import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
-import org.junit.After;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
@@ -149,17 +151,6 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
-
-import org.junit.Assert;
-import org.junit.Before;
-import org.junit.Ignore;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
-import org.junit.rules.Timeout;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import static org.mockito.ArgumentMatchers.anyObject;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -1156,78 +1147,6 @@ public final class TestSecureOzoneCluster {
         om.stop();
       }
       IOUtils.closeQuietly(om);
-    }
-  }
-
-  /**
-   * Tests container token renewal after a certificate renew.
-   */
-  @Test
-  public void testContainerTokenRenewCrossCertificateRenew() throws Exception {
-    // Setup secure SCM for start.
-    final int certLifetime = 40 * 1000; // 40s
-    conf.set(HDDS_X509_DEFAULT_DURATION,
-        Duration.ofMillis(certLifetime).toString());
-    conf.set(HDDS_X509_MAX_DURATION,
-        Duration.ofMillis(certLifetime).toString());
-    conf.set(HDDS_X509_RENEW_GRACE_DURATION,
-        Duration.ofMillis(certLifetime - 15 * 1000).toString());
-    conf.setBoolean(HDDS_CONTAINER_TOKEN_ENABLED, true);
-    conf.setLong(HDDS_BLOCK_TOKEN_EXPIRY_TIME, certLifetime - 20 * 1000);
-
-    initSCM();
-    scm = HddsTestUtils.getScmSimple(conf);
-    try {
-      CertificateClientTestImpl certClient =
-          new CertificateClientTestImpl(conf, true);
-      X509Certificate scmCert = certClient.getCertificate();
-      String scmCertId1 = scmCert.getSerialNumber().toString();
-      // Start SCM
-      scm.setScmCertificateClient(certClient);
-      scm.start();
-
-      UserGroupInformation ugi = UserGroupInformation.getCurrentUser();
-      // Get SCM client which will authenticate via Kerberos
-      SCMContainerLocationFailoverProxyProvider proxyProvider =
-          new SCMContainerLocationFailoverProxyProvider(conf, ugi);
-      StorageContainerLocationProtocolClientSideTranslatorPB scmClient =
-          new StorageContainerLocationProtocolClientSideTranslatorPB(
-              proxyProvider);
-
-      // Since client is already connected get a delegation token
-      ContainerID containerID = new ContainerID(1);
-      Token<?> token1 = scmClient.getContainerToken(containerID);
-
-      // Check if token is of right kind and renewer is running instance
-      assertNotNull(token1);
-      assertEquals(ContainerTokenIdentifier.KIND, token1.getKind());
-      assertEquals(containerID.toString(), token1.getService().toString());
-      ContainerTokenIdentifier temp = new ContainerTokenIdentifier();
-      ByteArrayInputStream buf = new ByteArrayInputStream(
-          token1.getIdentifier());
-      DataInputStream in = new DataInputStream(buf);
-      temp.readFields(in);
-      assertEquals(scmCertId1, temp.getCertSerialId());
-
-      // Wait for SCM certificate to renew
-      GenericTestUtils.waitFor(() -> !scmCertId1.equals(
-              certClient.getCertificate().getSerialNumber().toString()),
-          100, certLifetime);
-      String scmCertId2 =
-          certClient.getCertificate().getSerialNumber().toString();
-      assertNotEquals(scmCertId1, scmCertId2);
-
-      // Get a new container token
-      containerID = new ContainerID(2);
-      Token<?> token2 = scmClient.getContainerToken(containerID);
-      buf = new ByteArrayInputStream(token2.getIdentifier());
-      in = new DataInputStream(buf);
-      temp.readFields(in);
-      assertEquals(scmCertId2, temp.getCertSerialId());
-    } finally {
-      if (scm != null) {
-        scm.stop();
-      }
     }
   }
 

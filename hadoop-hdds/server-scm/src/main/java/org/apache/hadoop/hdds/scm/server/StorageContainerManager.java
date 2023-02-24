@@ -24,9 +24,6 @@ package org.apache.hadoop.hdds.scm.server;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.protobuf.BlockingService;
-
-import java.time.Duration;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdds.HddsConfigKeys;
@@ -38,56 +35,11 @@ import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.NodeState;
 import org.apache.hadoop.hdds.scm.PipelineChoosePolicy;
 import org.apache.hadoop.hdds.scm.PlacementPolicy;
-import org.apache.hadoop.hdds.scm.ScmUtils;
-import org.apache.hadoop.hdds.scm.container.ContainerManager;
-import org.apache.hadoop.hdds.scm.container.ContainerManagerImpl;
 import org.apache.hadoop.hdds.scm.PlacementPolicyValidateProxy;
-import org.apache.hadoop.hdds.scm.container.ContainerReplica;
-import org.apache.hadoop.hdds.scm.container.replication.ContainerReplicaPendingOps;
-import org.apache.hadoop.hdds.scm.container.replication.DatanodeCommandCountUpdatedHandler;
-import org.apache.hadoop.hdds.scm.container.replication.LegacyReplicationManager;
-import org.apache.hadoop.hdds.scm.crl.CRLStatusReportHandler;
-import org.apache.hadoop.hdds.scm.ha.BackgroundSCMService;
-import org.apache.hadoop.hdds.scm.ha.HASecurityUtils;
-import org.apache.hadoop.hdds.scm.ha.SCMContext;
-import org.apache.hadoop.hdds.scm.ha.SCMHAManager;
-import org.apache.hadoop.hdds.scm.ha.SCMHAManagerImpl;
-import org.apache.hadoop.hdds.scm.ha.SCMHANodeDetails;
-import org.apache.hadoop.hdds.scm.ha.SCMNodeInfo;
-import org.apache.hadoop.hdds.scm.ha.SCMRatisServer;
-import org.apache.hadoop.hdds.scm.ha.SCMServiceManager;
-import org.apache.hadoop.hdds.scm.ha.SCMNodeDetails;
-import org.apache.hadoop.hdds.scm.ha.SCMRatisServerImpl;
-import org.apache.hadoop.hdds.scm.ha.SCMHAUtils;
-import org.apache.hadoop.hdds.scm.ha.SequenceIdGenerator;
-import org.apache.hadoop.hdds.scm.ScmInfo;
-import org.apache.hadoop.hdds.scm.node.NodeAddressUpdateHandler;
-import org.apache.hadoop.hdds.scm.security.SecretKeyManagerService;
-import org.apache.hadoop.hdds.scm.server.upgrade.FinalizationManager;
-import org.apache.hadoop.hdds.scm.server.upgrade.FinalizationManagerImpl;
-import org.apache.hadoop.hdds.scm.node.CommandQueueReportHandler;
-import org.apache.hadoop.hdds.scm.ha.StatefulServiceStateManager;
-import org.apache.hadoop.hdds.scm.ha.StatefulServiceStateManagerImpl;
-import org.apache.hadoop.hdds.scm.server.upgrade.SCMUpgradeFinalizationContext;
-import org.apache.hadoop.hdds.scm.server.upgrade.ScmHAUnfinalizedStateValidationAction;
-import org.apache.hadoop.hdds.scm.pipeline.WritableContainerFactory;
-import org.apache.hadoop.hdds.security.symmetric.SecretKeyManager;
-import org.apache.hadoop.hdds.security.token.ContainerTokenGenerator;
-import org.apache.hadoop.hdds.security.token.ContainerTokenSecretManager;
-import org.apache.hadoop.hdds.security.x509.certificate.authority.CertificateStore;
-import org.apache.hadoop.hdds.security.x509.certificate.authority.profile.DefaultCAProfile;
-import org.apache.hadoop.hdds.security.x509.certificate.authority.profile.DefaultProfile;
-import org.apache.hadoop.hdds.security.x509.certificate.client.CertificateClient;
-import org.apache.hadoop.hdds.security.x509.certificate.client.SCMCertificateClient;
-import org.apache.hadoop.hdds.security.x509.certificate.utils.CertificateCodec;
-import org.apache.hadoop.hdds.server.OzoneAdmins;
-import org.apache.hadoop.hdds.server.ServerUtils;
-import org.apache.hadoop.hdds.server.events.FixedThreadPoolWithAffinityExecutor;
-import org.apache.hadoop.hdds.server.http.RatisDropwizardExports;
-import org.apache.hadoop.hdds.utils.HAUtils;
-import org.apache.hadoop.hdds.utils.HddsServerUtil;
 import org.apache.hadoop.hdds.scm.ScmConfig;
 import org.apache.hadoop.hdds.scm.ScmConfigKeys;
+import org.apache.hadoop.hdds.scm.ScmInfo;
+import org.apache.hadoop.hdds.scm.ScmUtils;
 import org.apache.hadoop.hdds.scm.block.BlockManager;
 import org.apache.hadoop.hdds.scm.block.BlockManagerImpl;
 import org.apache.hadoop.hdds.scm.block.DeletedBlockLogImpl;
@@ -96,46 +48,91 @@ import org.apache.hadoop.hdds.scm.container.CloseContainerEventHandler;
 import org.apache.hadoop.hdds.scm.container.ContainerActionsHandler;
 import org.apache.hadoop.hdds.scm.container.ContainerID;
 import org.apache.hadoop.hdds.scm.container.ContainerInfo;
+import org.apache.hadoop.hdds.scm.container.ContainerManager;
+import org.apache.hadoop.hdds.scm.container.ContainerManagerImpl;
+import org.apache.hadoop.hdds.scm.container.ContainerReplica;
 import org.apache.hadoop.hdds.scm.container.ContainerReportHandler;
 import org.apache.hadoop.hdds.scm.container.IncrementalContainerReportHandler;
-import org.apache.hadoop.hdds.scm.container.replication.ReplicationManager;
 import org.apache.hadoop.hdds.scm.container.balancer.ContainerBalancer;
 import org.apache.hadoop.hdds.scm.container.placement.algorithms.ContainerPlacementPolicyFactory;
 import org.apache.hadoop.hdds.scm.container.placement.algorithms.SCMContainerPlacementMetrics;
 import org.apache.hadoop.hdds.scm.container.placement.metrics.SCMMetrics;
+import org.apache.hadoop.hdds.scm.container.replication.ContainerReplicaPendingOps;
+import org.apache.hadoop.hdds.scm.container.replication.DatanodeCommandCountUpdatedHandler;
+import org.apache.hadoop.hdds.scm.container.replication.LegacyReplicationManager;
+import org.apache.hadoop.hdds.scm.container.replication.ReplicationManager;
+import org.apache.hadoop.hdds.scm.crl.CRLStatusReportHandler;
 import org.apache.hadoop.hdds.scm.events.SCMEvents;
 import org.apache.hadoop.hdds.scm.exceptions.SCMException;
 import org.apache.hadoop.hdds.scm.exceptions.SCMException.ResultCodes;
+import org.apache.hadoop.hdds.scm.ha.BackgroundSCMService;
+import org.apache.hadoop.hdds.scm.ha.HASecurityUtils;
+import org.apache.hadoop.hdds.scm.ha.SCMContext;
+import org.apache.hadoop.hdds.scm.ha.SCMHAManager;
+import org.apache.hadoop.hdds.scm.ha.SCMHAManagerImpl;
+import org.apache.hadoop.hdds.scm.ha.SCMHANodeDetails;
+import org.apache.hadoop.hdds.scm.ha.SCMHAUtils;
+import org.apache.hadoop.hdds.scm.ha.SCMNodeDetails;
+import org.apache.hadoop.hdds.scm.ha.SCMNodeInfo;
+import org.apache.hadoop.hdds.scm.ha.SCMRatisServer;
+import org.apache.hadoop.hdds.scm.ha.SCMRatisServerImpl;
+import org.apache.hadoop.hdds.scm.ha.SCMServiceManager;
+import org.apache.hadoop.hdds.scm.ha.SequenceIdGenerator;
+import org.apache.hadoop.hdds.scm.ha.StatefulServiceStateManager;
+import org.apache.hadoop.hdds.scm.ha.StatefulServiceStateManagerImpl;
 import org.apache.hadoop.hdds.scm.metadata.SCMMetadataStore;
 import org.apache.hadoop.hdds.scm.metadata.SCMMetadataStoreImpl;
 import org.apache.hadoop.hdds.scm.net.NetworkTopology;
 import org.apache.hadoop.hdds.scm.net.NetworkTopologyImpl;
+import org.apache.hadoop.hdds.scm.node.CommandQueueReportHandler;
 import org.apache.hadoop.hdds.scm.node.DeadNodeHandler;
+import org.apache.hadoop.hdds.scm.node.HealthyReadOnlyNodeHandler;
 import org.apache.hadoop.hdds.scm.node.NewNodeHandler;
-import org.apache.hadoop.hdds.scm.node.StartDatanodeAdminHandler;
+import org.apache.hadoop.hdds.scm.node.NodeAddressUpdateHandler;
+import org.apache.hadoop.hdds.scm.node.NodeDecommissionManager;
 import org.apache.hadoop.hdds.scm.node.NodeManager;
 import org.apache.hadoop.hdds.scm.node.NodeReportHandler;
-import org.apache.hadoop.hdds.scm.node.HealthyReadOnlyNodeHandler;
 import org.apache.hadoop.hdds.scm.node.ReadOnlyHealthyToHealthyNodeHandler;
 import org.apache.hadoop.hdds.scm.node.SCMNodeManager;
 import org.apache.hadoop.hdds.scm.node.StaleNodeHandler;
-import org.apache.hadoop.hdds.scm.node.NodeDecommissionManager;
+import org.apache.hadoop.hdds.scm.node.StartDatanodeAdminHandler;
 import org.apache.hadoop.hdds.scm.pipeline.PipelineActionHandler;
 import org.apache.hadoop.hdds.scm.pipeline.PipelineManager;
 import org.apache.hadoop.hdds.scm.pipeline.PipelineManagerImpl;
 import org.apache.hadoop.hdds.scm.pipeline.PipelineReportHandler;
+import org.apache.hadoop.hdds.scm.pipeline.WritableContainerFactory;
 import org.apache.hadoop.hdds.scm.pipeline.choose.algorithms.PipelineChoosePolicyFactory;
 import org.apache.hadoop.hdds.scm.safemode.SCMSafeModeManager;
+import org.apache.hadoop.hdds.scm.security.SecretKeyManagerService;
+import org.apache.hadoop.hdds.scm.server.SCMDatanodeHeartbeatDispatcher.ContainerReport;
 import org.apache.hadoop.hdds.scm.server.SCMDatanodeHeartbeatDispatcher.ContainerReportFromDatanode;
 import org.apache.hadoop.hdds.scm.server.SCMDatanodeHeartbeatDispatcher.IncrementalContainerReportFromDatanode;
-import org.apache.hadoop.hdds.security.OzoneSecurityException;
+import org.apache.hadoop.hdds.scm.server.upgrade.FinalizationManager;
+import org.apache.hadoop.hdds.scm.server.upgrade.FinalizationManagerImpl;
+import org.apache.hadoop.hdds.scm.server.upgrade.SCMUpgradeFinalizationContext;
+import org.apache.hadoop.hdds.scm.server.upgrade.ScmHAUnfinalizedStateValidationAction;
+import org.apache.hadoop.hdds.security.symmetric.SecretKeyManager;
+import org.apache.hadoop.hdds.security.token.ContainerTokenGenerator;
+import org.apache.hadoop.hdds.security.token.ContainerTokenSecretManager;
 import org.apache.hadoop.hdds.security.x509.SecurityConfig;
 import org.apache.hadoop.hdds.security.x509.certificate.authority.CertificateServer;
+import org.apache.hadoop.hdds.security.x509.certificate.authority.CertificateStore;
 import org.apache.hadoop.hdds.security.x509.certificate.authority.DefaultCAServer;
+import org.apache.hadoop.hdds.security.x509.certificate.authority.profile.DefaultCAProfile;
+import org.apache.hadoop.hdds.security.x509.certificate.authority.profile.DefaultProfile;
+import org.apache.hadoop.hdds.security.x509.certificate.client.CertificateClient;
+import org.apache.hadoop.hdds.security.x509.certificate.client.SCMCertificateClient;
+import org.apache.hadoop.hdds.security.x509.certificate.utils.CertificateCodec;
+import org.apache.hadoop.hdds.server.OzoneAdmins;
+import org.apache.hadoop.hdds.server.ServerUtils;
 import org.apache.hadoop.hdds.server.ServiceRuntimeInfoImpl;
 import org.apache.hadoop.hdds.server.events.EventPublisher;
 import org.apache.hadoop.hdds.server.events.EventQueue;
+import org.apache.hadoop.hdds.server.events.FixedThreadPoolWithAffinityExecutor;
+import org.apache.hadoop.hdds.server.http.RatisDropwizardExports;
 import org.apache.hadoop.hdds.upgrade.HDDSLayoutVersionManager;
+import org.apache.hadoop.hdds.utils.HAUtils;
+import org.apache.hadoop.hdds.utils.HddsServerUtil;
 import org.apache.hadoop.hdds.utils.HddsVersionInfo;
 import org.apache.hadoop.hdds.utils.LegacyHadoopConfigurationSource;
 import org.apache.hadoop.io.IOUtils;
@@ -157,17 +154,16 @@ import org.apache.hadoop.util.JvmPauseMonitor;
 import org.apache.ratis.util.ExitUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.apache.hadoop.hdds.scm.server.SCMDatanodeHeartbeatDispatcher.ContainerReport;
 
 import javax.management.ObjectName;
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.math.BigInteger;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -180,14 +176,15 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.hadoop.hdds.scm.ScmConfigKeys.OZONE_SCM_EVENT_REPORT_EXEC_WAIT_THRESHOLD_DEFAULT;
 import static org.apache.hadoop.hdds.scm.ScmConfigKeys.OZONE_SCM_EVENT_REPORT_QUEUE_WAIT_THRESHOLD_DEFAULT;
 import static org.apache.hadoop.hdds.scm.security.SecretKeyManagerService.isSecretKeyEnable;
 import static org.apache.hadoop.hdds.security.x509.certificate.authority.CertificateStore.CertType.VALID_CERTS;
 import static org.apache.hadoop.ozone.OzoneConsts.CRL_SEQUENCE_ID_KEY;
-import static org.apache.hadoop.ozone.OzoneConsts.SCM_SUB_CA_PREFIX;
 import static org.apache.hadoop.ozone.OzoneConsts.SCM_ROOT_CA_COMPONENT_NAME;
+import static org.apache.hadoop.ozone.OzoneConsts.SCM_SUB_CA_PREFIX;
 
 /**
  * StorageContainerManager is the main entry point for the service that
@@ -953,8 +950,8 @@ public final class StorageContainerManager extends ServiceRuntimeInfoImpl
       scmCertificateClient = new SCMCertificateClient(securityConfig,
           certSerialNumber, SCM_ROOT_CA_COMPONENT_NAME);
     }
-    return new ContainerTokenSecretManager(securityConfig,
-        expiryTime);
+    return new ContainerTokenSecretManager(expiryTime,
+        secretKeyManagerService.getSecretKeyManager());
   }
 
   /**
@@ -1454,7 +1451,6 @@ public final class StorageContainerManager extends ServiceRuntimeInfoImpl
     }
 
     scmHAManager.start();
-    startSecretManagerIfNecessary();
 
     ms = HddsServerUtil
         .initializeMetrics(configuration, "StorageContainerManager");
@@ -1605,8 +1601,6 @@ public final class StorageContainerManager extends ServiceRuntimeInfoImpl
     } catch (Exception ex) {
       LOG.error("SCM block manager service stop failed.", ex);
     }
-
-    stopSecretManager();
 
     if (metrics != null) {
       metrics.unRegister();
@@ -1759,6 +1753,12 @@ public final class StorageContainerManager extends ServiceRuntimeInfoImpl
   @VisibleForTesting
   public SCMSafeModeManager getScmSafeModeManager() {
     return scmSafeModeManager;
+  }
+
+  @VisibleForTesting
+  public SecretKeyManager getSecretKeyManager() {
+    return secretKeyManagerService != null ?
+        secretKeyManagerService.getSecretKeyManager() : null;
   }
 
   @Override
@@ -1944,46 +1944,6 @@ public final class StorageContainerManager extends ServiceRuntimeInfoImpl
    */
   public String getSCMNodeId() {
     return scmHANodeDetails.getLocalNodeDetails().getNodeId();
-  }
-
-  private void startSecretManagerIfNecessary() {
-    boolean shouldRun = securityConfig.isSecurityEnabled()
-        && securityConfig.isContainerTokenEnabled()
-        && containerTokenMgr != null;
-    if (shouldRun) {
-      boolean running = containerTokenMgr.isRunning();
-      if (!running) {
-        startSecretManager();
-      }
-    }
-  }
-
-  private void startSecretManager() {
-    try {
-      scmCertificateClient.assertValidKeysAndCertificate();
-    } catch (OzoneSecurityException e) {
-      LOG.error("Unable to read key pair.", e);
-      throw new UncheckedIOException(e);
-    }
-    try {
-      LOG.info("Starting token manager");
-      containerTokenMgr.start(scmCertificateClient);
-    } catch (IOException e) {
-      // Unable to start secret manager.
-      LOG.error("Error starting block token secret manager.", e);
-      throw new UncheckedIOException(e);
-    }
-  }
-
-  private void stopSecretManager() {
-    if (containerTokenMgr != null) {
-      LOG.info("Stopping block token manager.");
-      try {
-        containerTokenMgr.stop();
-      } catch (IOException e) {
-        LOG.error("Failed to stop block token manager", e);
-      }
-    }
   }
 
   public ContainerTokenGenerator getContainerTokenGenerator() {

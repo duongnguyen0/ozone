@@ -182,18 +182,17 @@ public final class TestSecretKeysApi {
         ozoneKeytab.getAbsolutePath());
   }
 
-
   /**
    * Test secret key apis in happy case.
    */
   @Test
   public void testSecretKeyApiSuccess() throws Exception {
     enableBlockToken();
-    // set a low rotation period, of 2s, expiry is 15s, expect 7 active keys
+    // set a low rotation period, of 1s, expiry is 7s, expect 7 active keys
     // at any moment.
     conf.set(HDDS_SECRET_KEY_ROTATE_CHECK_DURATION, "100ms");
     conf.set(HDDS_SECRET_KEY_ROTATE_DURATION, "1s");
-    conf.set(HDDS_SECRET_KEY_EXPIRY_DURATION, "7s");
+    conf.set(HDDS_SECRET_KEY_EXPIRY_DURATION, "7100ms");
 
     startCluster();
     SCMSecurityProtocol securityProtocol = getScmSecurityProtocol();

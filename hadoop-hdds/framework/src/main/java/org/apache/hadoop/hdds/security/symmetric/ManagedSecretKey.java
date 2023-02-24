@@ -20,11 +20,16 @@ package org.apache.hadoop.hdds.security.symmetric;
 
 import com.google.protobuf.ByteString;
 import org.apache.hadoop.hdds.protocol.proto.SCMSecurityProtocolProtos;
+import org.apache.hadoop.security.token.TokenIdentifier;
 import org.apache.hadoop.util.ProtobufUtils;
 
+import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.Serializable;
+import java.security.InvalidKeyException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -86,6 +91,30 @@ public final class ManagedSecretKey implements Serializable {
   public String toString() {
     return "SecretKey(id = " + id + ", creation at: "
         + creationTime + ", expire at: " + expiryTime + ")";
+  }
+
+  public byte[] sign(byte[] data) {
+    try {
+      Mac mac = Mac.getInstance(secretKey.getAlgorithm());
+      mac.init(secretKey);
+      return mac.doFinal(data);
+    } catch (InvalidKeyException | NoSuchAlgorithmException ex) {
+      throw new IllegalArgumentException("Invalid key to HMAC computation",
+          ex);
+    }
+  }
+
+  public byte[] sign(TokenIdentifier tokenId) {
+    return sign(tokenId.getBytes());
+  }
+
+  public boolean isValidSignature(byte[] data, byte[] signature) {
+    byte[] expectedSignature = sign(data);
+    return MessageDigest.isEqual(expectedSignature, signature);
+  }
+
+  public boolean isValidSignature(TokenIdentifier tokenId, byte[] signature) {
+    return isValidSignature(tokenId.getBytes(), signature);
   }
 
   /**
