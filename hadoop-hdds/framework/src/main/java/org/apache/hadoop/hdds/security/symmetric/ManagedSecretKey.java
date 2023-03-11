@@ -42,6 +42,7 @@ public final class ManagedSecretKey implements Serializable {
   private final Instant creationTime;
   private final Instant expiryTime;
   private final SecretKey secretKey;
+  private final ThreadLocal<Mac> macInstances;
 
   public ManagedSecretKey(UUID id,
                           Instant creationTime,
@@ -51,6 +52,16 @@ public final class ManagedSecretKey implements Serializable {
     this.creationTime = creationTime;
     this.expiryTime = expiryTime;
     this.secretKey = secretKey;
+
+    // This help reuse Mac instances for the same thread.
+    macInstances = ThreadLocal.withInitial(() -> {
+      try {
+        return Mac.getInstance(secretKey.getAlgorithm());
+      } catch (NoSuchAlgorithmException e) {
+        throw new IllegalArgumentException(
+            "Invalid algorithm " + secretKey.getAlgorithm() , e);
+      }
+    });
   }
 
   public boolean isExpired() {
@@ -95,12 +106,11 @@ public final class ManagedSecretKey implements Serializable {
 
   public byte[] sign(byte[] data) {
     try {
-      Mac mac = Mac.getInstance(secretKey.getAlgorithm());
+      Mac mac = macInstances.get();
       mac.init(secretKey);
       return mac.doFinal(data);
-    } catch (InvalidKeyException | NoSuchAlgorithmException ex) {
-      throw new IllegalArgumentException("Invalid key to HMAC computation",
-          ex);
+    } catch (InvalidKeyException e) {
+      throw new IllegalArgumentException("Invalid key to HMAC computation", e);
     }
   }
 
