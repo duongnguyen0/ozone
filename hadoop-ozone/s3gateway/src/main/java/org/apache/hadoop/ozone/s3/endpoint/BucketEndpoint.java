@@ -71,6 +71,7 @@ import static org.apache.hadoop.ozone.OzoneAcl.AclScope.ACCESS;
 import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.NOT_IMPLEMENTED;
 import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.newError;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.ENCODING_TYPE;
+import static org.apache.hadoop.util.MetricUtil.captureLatencyNs;
 
 /**
  * Bucket level rest endpoints.
@@ -101,7 +102,7 @@ public class BucketEndpoint extends EndpointBase {
       @QueryParam("start-after") String startAfter,
       @QueryParam("uploads") String uploads,
       @QueryParam("acl") String aclMarker,
-      @Context HttpHeaders hh) throws OS3Exception, IOException {
+      @Context HttpHeaders hh) throws Exception {
     S3GAction s3GAction = S3GAction.GET_BUCKET;
     Iterator<? extends OzoneKey> ozoneKeyIterator;
     ContinueToken decodedToken =
@@ -110,7 +111,7 @@ public class BucketEndpoint extends EndpointBase {
     try {
       if (aclMarker != null) {
         s3GAction = S3GAction.GET_ACL;
-        S3BucketAcl result = getAcl(bucketName);
+        S3BucketAcl result = captureLatencyNs(null, () -> getAcl(bucketName));
         getMetrics().incGetAclSuccess();
         AUDIT.logReadSuccess(
             buildAuditMessageForSuccess(s3GAction, getAuditParameters()));

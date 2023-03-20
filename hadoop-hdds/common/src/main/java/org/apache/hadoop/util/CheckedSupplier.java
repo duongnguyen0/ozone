@@ -24,6 +24,6 @@ import java.io.IOException;
  * of code generating a value with a possibility of throwing an IOException.
  */
 @FunctionalInterface
-public interface CheckedSupplier<T, E extends IOException> {
+public interface CheckedSupplier<T, E extends Exception> {
   T get() throws E;
 }
