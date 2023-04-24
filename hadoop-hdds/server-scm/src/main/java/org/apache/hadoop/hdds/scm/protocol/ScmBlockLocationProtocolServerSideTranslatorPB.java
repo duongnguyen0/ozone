@@ -106,6 +106,7 @@ public final class ScmBlockLocationProtocolServerSideTranslatorPB
   public SCMBlockLocationResponse send(RpcController controller,
       SCMBlockLocationRequest request) throws ServiceException {
     if (!scm.checkLeader()) {
+      LOG.error("SCM is not Ratis leader {}", scm.getScmId());
       RatisUtil.checkRatisException(
           scm.getScmHAManager().getRatisServer().triggerNotLeaderException(),
           scm.getBlockProtocolRpcPort(), scm.getScmId());

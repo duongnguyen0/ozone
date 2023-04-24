@@ -592,7 +592,9 @@ public class MiniOzoneHAClusterImpl extends MiniOzoneClusterImpl {
             if (i == 1) {
               StorageContainerManager.scmInit(scmConfig, clusterId);
             } else {
+              LOG.info("Bootstrapping the scm {}", i);
               StorageContainerManager.scmBootstrap(scmConfig);
+              LOG.info("Bootstrapped the scm {}", i);
             }
             StorageContainerManager scm =
                 HddsTestUtils.getScmSimple(scmConfig, scmConfigurator);
@@ -609,7 +611,7 @@ public class MiniOzoneHAClusterImpl extends MiniOzoneClusterImpl {
             if (i <= numOfActiveSCMs) {
               scm.start();
               activeSCMs.add(scm);
-              LOG.info("Started SCM RPC server at {}",
+              LOG.info("Started SCM RPC server {} at {}", i,
                   scm.getClientRpcAddress());
             } else {
               inactiveSCMs.add(scm);
