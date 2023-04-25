@@ -574,6 +574,8 @@ public class MiniOzoneHAClusterImpl extends MiniOzoneClusterImpl {
       while (true) {
         try {
           initSCMHAConfig();
+          LOG.info("Creating {} SCMs, with {} active.", numOfSCMs,
+              numOfActiveSCMs);
 
           for (int i = 1; i <= numOfSCMs; i++) {
             // Set nodeId
@@ -609,6 +611,8 @@ public class MiniOzoneHAClusterImpl extends MiniOzoneClusterImpl {
             scmList.add(scm);
 
             if (i <= numOfActiveSCMs) {
+              LOG.info("Starting SCM RPC server {} at {}", i,
+                  scm.getClientRpcAddress());
               scm.start();
               activeSCMs.add(scm);
               LOG.info("Started SCM RPC server {} at {}", i,
