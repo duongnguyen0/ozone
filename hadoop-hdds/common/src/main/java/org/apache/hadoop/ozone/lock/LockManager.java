@@ -98,7 +98,7 @@ public class LockManager<R> {
    * @param resource on which the read lock has to be acquired
    */
   public void readLock(final R resource) {
-    acquire(resource, ActiveLock::readLock);
+    getLockForLocking(resource).readLock();
   }
 
   /**
@@ -109,7 +109,8 @@ public class LockManager<R> {
    *                                      hold this lock
    */
   public void readUnlock(final R resource) throws IllegalMonitorStateException {
-    release(resource, ActiveLock::readUnlock);
+    getLockForReleasing(resource).readUnlock();
+    decrementActiveLockCount(resource);
   }
 
   /**
@@ -129,7 +130,7 @@ public class LockManager<R> {
    * @param resource on which the lock has to be acquired
    */
   public void writeLock(final R resource) {
-    acquire(resource, ActiveLock::writeLock);
+    getLockForLocking(resource).writeLock();
   }
 
   /**
@@ -141,28 +142,7 @@ public class LockManager<R> {
    */
   public void writeUnlock(final R resource)
       throws IllegalMonitorStateException {
-    release(resource, ActiveLock::writeUnlock);
-  }
-
-  /**
-   * Acquires the lock on given resource using the provided lock function.
-   *
-   * @param resource on which the lock has to be acquired
-   * @param lockFn function to acquire the lock
-   */
-  private void acquire(final R resource, final Consumer<ActiveLock> lockFn) {
-    lockFn.accept(getLockForLocking(resource));
-  }
-
-  /**
-   * Releases the lock on given resource using the provided release function.
-   *
-   * @param resource for which the lock has to be released
-   * @param releaseFn function to release the lock
-   */
-  private void release(final R resource, final Consumer<ActiveLock> releaseFn) {
-    final ActiveLock lock = getLockForReleasing(resource);
-    releaseFn.accept(lock);
+    getLockForReleasing(resource).writeUnlock();
     decrementActiveLockCount(resource);
   }
 
