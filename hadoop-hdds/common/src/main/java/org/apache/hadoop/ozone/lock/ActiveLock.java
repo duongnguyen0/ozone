@@ -106,15 +106,15 @@ public final class ActiveLock {
   /**
    * Increment the active count of the lock.
    */
-  void incrementActiveCount() {
-    count.incrementAndGet();
+  int incrementActiveCount() {
+    return count.incrementAndGet();
   }
 
   /**
    * Decrement the active count of the lock.
    */
-  void decrementActiveCount() {
-    count.decrementAndGet();
+  int decrementActiveCount() {
+    return count.decrementAndGet();
   }
 
   /**

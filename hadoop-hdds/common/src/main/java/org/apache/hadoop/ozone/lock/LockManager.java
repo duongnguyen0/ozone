@@ -110,7 +110,7 @@ public class LockManager<R> {
    */
   public void readUnlock(final R resource) throws IllegalMonitorStateException {
     getLockForReleasing(resource).readUnlock();
-    decrementActiveLockCount(resource);
+//    decrementActiveLockCount(resource);
   }
 
   /**
@@ -143,7 +143,7 @@ public class LockManager<R> {
   public void writeUnlock(final R resource)
       throws IllegalMonitorStateException {
     getLockForReleasing(resource).writeUnlock();
-    decrementActiveLockCount(resource);
+//    decrementActiveLockCount(resource);
   }
 
   /**
@@ -162,21 +162,16 @@ public class LockManager<R> {
      * be removed from the activeLocks map and returned to
      * the object pool.
      */
-    return activeLocks.compute(resource, (k, v) -> {
-      final ActiveLock lock;
+    ActiveLock lock = activeLocks.computeIfAbsent(resource, (k) -> {
       try {
-        if (v == null) {
-          lock = lockPool.borrowObject();
-        } else {
-          lock = v;
-        }
-        lock.incrementActiveCount();
+        return lockPool.borrowObject();
       } catch (Exception ex) {
         LOG.error("Unable to obtain lock.", ex);
         throw new RuntimeException(ex);
       }
-      return lock;
     });
+    lock.incrementActiveCount();
+    return lock;
   }
 
   /**
@@ -188,7 +183,11 @@ public class LockManager<R> {
    */
   private ActiveLock getLockForReleasing(final R resource) {
     if (activeLocks.containsKey(resource)) {
-      return activeLocks.get(resource);
+      ActiveLock activeLock = activeLocks.get(resource);
+      if (activeLock.decrementActiveCount() == 0) {
+        activeLocks.remove(resource);
+      }
+      return activeLock;
     }
     // Someone is releasing a lock which was never acquired.
     LOG.error("Trying to release the lock on {}, which was never acquired.",
