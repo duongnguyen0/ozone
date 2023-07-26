@@ -280,7 +280,6 @@ public class HddsDatanodeService extends GenericCli implements ServicePlugin {
               HddsServerUtil.getSecretKeyClientForDatanode(conf);
           secretKeyClient = DefaultSecretKeyClient.create(conf,
               secretKeyProtocol);
-          secretKeyClient.start(conf);
         }
       }
       datanodeStateMachine = new DatanodeStateMachine(datanodeDetails, conf,
@@ -314,10 +313,14 @@ public class HddsDatanodeService extends GenericCli implements ServicePlugin {
       admins = OzoneAdmins.getOzoneAdmins(starterUser, conf);
       LOG.info("Datanode start with admins: {}", admins.getAdminUsernames());
 
-      clientProtocolServer.start();
       startPlugins();
       // Starting HDDS Daemons
       datanodeStateMachine.startDaemon();
+      if (secretKeyClient != null) {
+        secretKeyClient.start(conf);
+      }
+
+      clientProtocolServer.start();
 
       //for standalone, follower only test we can start the datanode (==raft
       // rings)
