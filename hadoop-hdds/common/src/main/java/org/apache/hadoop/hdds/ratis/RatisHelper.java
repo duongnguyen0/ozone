@@ -26,6 +26,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
@@ -622,9 +623,15 @@ public final class RatisHelper {
    */
   public static boolean attemptUntilTrue(BooleanSupplier condition, Duration pollInterval, Duration timeout) {
     try {
+      Objects.requireNonNull(condition, "condition == null");
+
       final int attempts = calculateAttempts(pollInterval, timeout);
       final TimeDuration sleepTime = TimeDuration.valueOf(pollInterval.toMillis(), MILLISECONDS);
-      JavaUtils.attemptUntilTrue(condition, attempts, sleepTime, null, null);
+      JavaUtils.attempt(() -> {
+        if (!condition.getAsBoolean()) {
+          throw new IllegalStateException("Condition " + null + " is false.");
+        }
+      }, attempts, sleepTime, null, null);
       return true;
     } catch (InterruptedException | IllegalStateException exception) {
       return false;
