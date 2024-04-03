@@ -20,7 +20,10 @@ package org.apache.hadoop.hdds.utils;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.RemovalListener;
 import com.google.common.cache.Weigher;
+
+import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 /**
@@ -65,17 +68,19 @@ public class ResourceCache<K, V> implements Cache<K, V> {
   }
 
   @Override
-  public void removeIf(Predicate<K> predicate) {
+  public void removeIf(Predicate<K> predicate, Consumer<V> cleanup) {
     Objects.requireNonNull(predicate);
-    for (K key : cache.asMap().keySet()) {
-      if (predicate.test(key)) {
-        remove(key);
+    for (Map.Entry<K, V> entry : cache.asMap().entrySet()) {
+      if (predicate.test(entry.getKey())) {
+        cleanup.accept(entry.getValue());
+        remove(entry.getKey());
       }
     }
   }
 
   @Override
-  public void clear() {
+  public void clear(Consumer<V> cleanup) {
+    cache.asMap().values().forEach(cleanup);
     cache.invalidateAll();
   }
 }

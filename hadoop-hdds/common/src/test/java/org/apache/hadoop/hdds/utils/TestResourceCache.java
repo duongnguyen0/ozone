@@ -73,13 +73,13 @@ public class TestResourceCache {
   @Test
   @Timeout(5)
   public void testRemoveIf() throws Exception {
-    testRemove(cache -> cache.removeIf(k -> k <= 2), 1, 2);
+    testRemove(cache -> cache.removeIf(k -> k <= 2, v -> {}), 1, 2);
   }
 
   @Test
   @Timeout(5)
   public void testClear() throws Exception {
-    testRemove(Cache::clear, 1, 2, 3);
+    testRemove(c -> c.clear(v -> {}), 1, 2, 3);
   }
 
   private static void testRemove(Consumer<Cache<Integer, String>> op,

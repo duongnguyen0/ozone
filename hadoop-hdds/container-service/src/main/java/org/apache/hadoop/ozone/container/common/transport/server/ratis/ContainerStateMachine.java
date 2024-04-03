@@ -94,6 +94,7 @@ import org.apache.ratis.statemachine.impl.SingleFileSnapshotInfo;
 import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
 import org.apache.ratis.thirdparty.com.google.protobuf.InvalidProtocolBufferException;
 import org.apache.ratis.thirdparty.com.google.protobuf.TextFormat;
+import org.apache.ratis.util.ReferenceCountedObject;
 import org.apache.ratis.util.TaskQueue;
 import org.apache.ratis.util.function.CheckedSupplier;
 import org.apache.ratis.util.JavaUtils;
@@ -193,7 +194,7 @@ public class ContainerStateMachine extends BaseStateMachine {
   private final ExecutorService executor;
   private final List<ThreadPoolExecutor> chunkExecutors;
   private final Map<Long, Long> applyTransactionCompletionMap;
-  private final Cache<Long, ByteString> stateMachineDataCache;
+  private final Cache<Long, ReferenceCountedObject<ByteString>> stateMachineDataCache;
   private final AtomicBoolean stateMachineHealthy;
 
   private final Semaphore applyTransactionSemaphore;
@@ -505,14 +506,17 @@ public class ContainerStateMachine extends BaseStateMachine {
   }
 
   private CompletableFuture<Message> writeStateMachineData(
-      ContainerCommandRequestProto requestProto, long entryIndex, long term,
+      ContainerCommandRequestProto requestProto, ReferenceCountedObject<LogEntryProto> entryRef,
       long startTime) {
     final WriteChunkRequestProto write = requestProto.getWriteChunk();
     RaftServer server = ratisServer.getServer();
     Preconditions.checkArgument(!write.getData().isEmpty());
+    LogEntryProto entry = entryRef.get();
+
     try {
       if (server.getDivision(gid).getInfo().isLeader()) {
-        stateMachineDataCache.put(entryIndex, write.getData());
+        entryRef.retain();
+        stateMachineDataCache.put(entry.getIndex(), entryRef.delegate(write.getData()));
       }
     } catch (InterruptedException ioe) {
       Thread.currentThread().interrupt();
@@ -523,8 +527,8 @@ public class ContainerStateMachine extends BaseStateMachine {
     final DispatcherContext context =
         DispatcherContext
             .newBuilder(DispatcherContext.Op.WRITE_STATE_MACHINE_DATA)
-            .setTerm(term)
-            .setLogIndex(entryIndex)
+            .setTerm(entry.getTerm())
+            .setLogIndex(entry.getIndex())
             .setStage(DispatcherContext.WriteChunkStage.WRITE_DATA)
             .setContainer2BCSIDMap(container2BCSIDMap)
             .build();
@@ -538,7 +542,7 @@ public class ContainerStateMachine extends BaseStateMachine {
           } catch (Exception e) {
             LOG.error("{}: writeChunk writeStateMachineData failed: blockId" +
                 "{} logIndex {} chunkName {}", gid, write.getBlockID(),
-                entryIndex, write.getChunkData().getChunkName(), e);
+                entry.getIndex(), write.getChunkData().getChunkName(), e);
             metrics.incNumWriteDataFails();
             // write chunks go in parallel. It's possible that one write chunk
             // see the stateMachine is marked unhealthy by other parallel thread
@@ -548,11 +552,11 @@ public class ContainerStateMachine extends BaseStateMachine {
           }
         }, getChunkExecutor(requestProto.getWriteChunk()));
 
-    writeChunkFutureMap.put(entryIndex, writeChunkFuture);
+    writeChunkFutureMap.put(entry.getIndex(), writeChunkFuture);
     if (LOG.isDebugEnabled()) {
       LOG.debug("{}: writeChunk writeStateMachineData : blockId" +
               "{} logIndex {} chunkName {}", gid, write.getBlockID(),
-          entryIndex, write.getChunkData().getChunkName());
+          entry.getIndex(), write.getChunkData().getChunkName());
     }
     // Remove the future once it finishes execution from the
     // writeChunkFutureMap.
@@ -563,7 +567,7 @@ public class ContainerStateMachine extends BaseStateMachine {
         StorageContainerException sce =
             new StorageContainerException(r.getMessage(), r.getResult());
         LOG.error(gid + ": writeChunk writeStateMachineData failed: blockId" +
-            write.getBlockID() + " logIndex " + entryIndex + " chunkName " +
+            write.getBlockID() + " logIndex " + entry.getIndex() + " chunkName " +
             write.getChunkData().getChunkName() + " Error message: " +
             r.getMessage() + " Container Result: " + r.getResult());
         metrics.incNumWriteDataFails();
@@ -578,7 +582,7 @@ public class ContainerStateMachine extends BaseStateMachine {
         if (LOG.isDebugEnabled()) {
           LOG.debug(gid +
               ": writeChunk writeStateMachineData  completed: blockId" +
-              write.getBlockID() + " logIndex " + entryIndex + " chunkName " +
+              write.getBlockID() + " logIndex " + entry.getIndex() + " chunkName " +
               write.getChunkData().getChunkName());
         }
         raftFuture.complete(r::toByteString);
@@ -586,7 +590,7 @@ public class ContainerStateMachine extends BaseStateMachine {
             Time.monotonicNowNanos() - startTime);
       }
 
-      writeChunkFutureMap.remove(entryIndex);
+      writeChunkFutureMap.remove(entry.getIndex());
       return r;
     });
     return raftFuture;
@@ -684,7 +688,7 @@ public class ContainerStateMachine extends BaseStateMachine {
    * and also with applyTransaction.
    */
   @Override
-  public CompletableFuture<Message> write(LogEntryProto entry, TransactionContext trx) {
+  public CompletableFuture<Message> write(ReferenceCountedObject<LogEntryProto> entryRef, TransactionContext trx) {
     try {
       metrics.incNumWriteStateMachineOps();
       long writeStateMachineStartTime = Time.monotonicNowNanos();
@@ -695,14 +699,10 @@ public class ContainerStateMachine extends BaseStateMachine {
 
       // For only writeChunk, there will be writeStateMachineData call.
       // CreateContainer will happen as a part of writeChunk only.
-      switch (cmdType) {
-      case WriteChunk:
-        return writeStateMachineData(requestProto, entry.getIndex(),
-            entry.getTerm(), writeStateMachineStartTime);
-      default:
-        throw new IllegalStateException("Cmd Type:" + cmdType
-            + " should not have state machine data");
+      if (cmdType == Type.WriteChunk) {
+        return writeStateMachineData(requestProto, entryRef, writeStateMachineStartTime);
       }
+      throw new IllegalStateException("Cmd Type:" + cmdType + " should not have state machine data");
     } catch (Exception e) {
       metrics.incNumWriteStateMachineFails();
       return completeExceptionally(e);
@@ -723,7 +723,7 @@ public class ContainerStateMachine extends BaseStateMachine {
     }
   }
 
-  private ByteString readStateMachineData(
+  private ReferenceCountedObject<ByteString> readStateMachineData(
       ContainerCommandRequestProto requestProto, long term, long index)
       throws IOException {
     // the stateMachine data is not present in the stateMachine cache,
@@ -778,7 +778,7 @@ public class ContainerStateMachine extends BaseStateMachine {
         "read chunk len=%s does not match chunk expected len=%s for chunk:%s",
         data.size(), chunkInfo.getLen(), chunkInfo);
 
-    return data;
+    return ReferenceCountedObject.wrap(data);
   }
 
   /**
@@ -807,7 +807,8 @@ public class ContainerStateMachine extends BaseStateMachine {
    *           which can be null if this method is invoked after {@link #applyTransaction(TransactionContext)}.
    */
   @Override
-  public CompletableFuture<ByteString> read(LogEntryProto entry, TransactionContext trx) {
+  public CompletableFuture<ReferenceCountedObject<ByteString>> retainRead(LogEntryProto entry,
+      TransactionContext trx) {
     metrics.incNumReadStateMachineOps();
     final ByteString dataInContext = Optional.ofNullable(trx)
         .map(TransactionContext::getStateMachineLogEntry)
@@ -815,12 +816,15 @@ public class ContainerStateMachine extends BaseStateMachine {
         .map(StateMachineEntryProto::getStateMachineData)
         .orElse(null);
     if (dataInContext != null && !dataInContext.isEmpty()) {
-      return CompletableFuture.completedFuture(dataInContext);
+      ReferenceCountedObject<ByteString> ref = ReferenceCountedObject.wrap(dataInContext);
+      ref.retain();
+      return CompletableFuture.completedFuture(ref);
     }
 
-    final ByteString dataInCache = stateMachineDataCache.get(entry.getIndex());
+    final ReferenceCountedObject<ByteString> dataInCache = stateMachineDataCache.get(entry.getIndex());
     if (dataInCache != null) {
-      Preconditions.checkArgument(!dataInCache.isEmpty());
+      dataInCache.retain();
+      Preconditions.checkArgument(!dataInCache.get().isEmpty());
       metrics.incNumDataCacheHit();
       return CompletableFuture.completedFuture(dataInCache);
     } else {
@@ -838,10 +842,13 @@ public class ContainerStateMachine extends BaseStateMachine {
         throw new IllegalStateException("Cmd type:" + requestProto.getCmdType()
             + " cannot have state machine data");
       }
-      final CompletableFuture<ByteString> future = new CompletableFuture<>();
+      final CompletableFuture<ReferenceCountedObject<ByteString>> future = new CompletableFuture<>();
       CompletableFuture.runAsync(() -> {
         try {
-          future.complete(readStateMachineData(requestProto, entry.getTerm(), entry.getIndex()));
+          ReferenceCountedObject<ByteString> ref =
+              readStateMachineData(requestProto, entry.getTerm(), entry.getIndex());
+          ref.retain();
+          future.complete(ref);
         } catch (IOException e) {
           metrics.incNumReadStateMachineFails();
           future.completeExceptionally(e);
@@ -930,7 +937,8 @@ public class ContainerStateMachine extends BaseStateMachine {
    */
   @Override
   public CompletableFuture<Message> applyTransaction(TransactionContext trx) {
-    long index = trx.getLogEntry().getIndex();
+    LogEntryProto logEntry = trx.getLogEntryUnsafe();
+    long index = logEntry.getIndex();
     try {
       // Remove the stateMachine data once both followers have caught up. If any
       // one of the follower is behind, the pending queue will max out as
@@ -942,7 +950,7 @@ public class ContainerStateMachine extends BaseStateMachine {
       removeStateMachineDataIfMajorityFollowSync(index);
       final DispatcherContext.Builder builder = DispatcherContext
           .newBuilder(DispatcherContext.Op.APPLY_TRANSACTION)
-          .setTerm(trx.getLogEntry().getTerm())
+          .setTerm(logEntry.getTerm())
           .setLogIndex(index);
 
       long applyTxnStartTime = Time.monotonicNowNanos();
@@ -1021,7 +1029,7 @@ public class ContainerStateMachine extends BaseStateMachine {
           // failures before.
           if (isStateMachineHealthy()) {
             final Long previous = applyTransactionCompletionMap
-                .put(index, trx.getLogEntry().getTerm());
+                .put(index, logEntry.getTerm());
             Preconditions.checkState(previous == null);
             updateLastApplied();
           }
@@ -1055,7 +1063,7 @@ public class ContainerStateMachine extends BaseStateMachine {
   }
 
   private void removeCacheDataUpTo(long index) {
-    stateMachineDataCache.removeIf(k -> k <= index);
+    stateMachineDataCache.removeIf(k -> k <= index, ReferenceCountedObject::release);
   }
 
   private static <T> CompletableFuture<T> completeExceptionally(Exception e) {
@@ -1072,13 +1080,13 @@ public class ContainerStateMachine extends BaseStateMachine {
 
   @Override
   public CompletableFuture<Void> truncate(long index) {
-    stateMachineDataCache.removeIf(k -> k > index);
+    stateMachineDataCache.removeIf(k -> k > index, ReferenceCountedObject::release);
     return CompletableFuture.completedFuture(null);
   }
 
   @VisibleForTesting
   public void evictStateMachineCache() {
-    stateMachineDataCache.clear();
+    stateMachineDataCache.clear(ReferenceCountedObject::release);
   }
 
   @Override

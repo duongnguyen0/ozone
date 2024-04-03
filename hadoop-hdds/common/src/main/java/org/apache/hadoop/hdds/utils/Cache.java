@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdds.utils;
 
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 /**
@@ -30,7 +31,7 @@ public interface Cache<K, V> {
 
   void remove(K key);
 
-  void removeIf(Predicate<K> predicate);
+  void removeIf(Predicate<K> predicate, Consumer<V> cleanup);
 
-  void clear();
+  void clear(Consumer<V> cleanup);
 }
