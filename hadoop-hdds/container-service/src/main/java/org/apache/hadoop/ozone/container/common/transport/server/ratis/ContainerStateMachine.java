@@ -226,7 +226,7 @@ public class ContainerStateMachine extends BaseStateMachine {
     // cache with FIFO eviction, and if element not found, this needs
     // to be obtained from disk for slow follower
     stateMachineDataCache = new ResourceCache<>(
-        (index, data) -> ((ByteString)data).size(),
+        (index, data) -> data.get().size(),
         pendingRequestsBytesLimit,
         (p) -> {
           if (p.wasEvicted()) {
