@@ -40,6 +40,7 @@ import org.apache.hadoop.hdds.security.SecurityConfig;
 import org.apache.hadoop.hdds.security.x509.certificate.client.CertificateClient;
 import org.apache.hadoop.hdds.utils.TransactionInfo;
 import org.apache.hadoop.hdds.utils.db.BatchOperation;
+import org.apache.hadoop.hdds.utils.db.DBCheckpoint;
 import org.apache.hadoop.hdds.utils.db.DBStore;
 import org.apache.hadoop.hdds.utils.db.Table;
 import org.apache.hadoop.security.authentication.client.AuthenticationException;
@@ -55,6 +56,7 @@ import org.junit.jupiter.api.TestMethodOrder;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.UUID;
 import java.util.concurrent.TimeoutException;
 
@@ -85,8 +87,9 @@ class TestSCMHAManagerImpl {
       TimeoutException {
     storageBaseDir = tempDir;
     clusterID = UUID.randomUUID().toString();
-    OzoneConfiguration conf = getConfig("scm1", 9894);
-    final StorageContainerManager scm = getMockStorageContainerManager(conf);
+    int leaderPort = 9894;
+    OzoneConfiguration conf = getConfig("scm1", leaderPort);
+    final StorageContainerManager scm = getMockStorageContainerManager(conf, leaderPort);
     SCMRatisServerImpl.initialize(clusterID, scm.getScmId(),
         scm.getScmNodeDetails(), conf);
     primarySCMHAManager = scm.getScmHAManager();
@@ -95,7 +98,7 @@ class TestSCMHAManagerImpl {
         .getDivision().getInfo();
     // Wait for Ratis Server to be ready
     waitForSCMToBeReady(ratisDivision);
-    follower = getMockStorageContainerManager(getConfig(FOLLOWER_SCM_ID, 9898))
+    follower = getMockStorageContainerManager(getConfig(FOLLOWER_SCM_ID, 9898), leaderPort)
         .getScmHAManager().getRatisServer();
   }
 
@@ -187,7 +190,7 @@ class TestSCMHAManagerImpl {
   }
 
   private StorageContainerManager getMockStorageContainerManager(
-      OzoneConfiguration conf) throws IOException {
+      OzoneConfiguration conf, int leaderPort) throws IOException {
     final String scmID =  UUID.randomUUID().toString();
 
     final DBStore dbStore = mock(DBStore.class);
@@ -211,6 +214,7 @@ class TestSCMHAManagerImpl {
         mock(NodeDecommissionManager.class);
     final SCMDatanodeProtocolServer datanodeProtocolServer =
         mock(SCMDatanodeProtocolServer.class);
+    final SCMNodeDetails leaderNodeDetails = mock(SCMNodeDetails.class);
 
     when(scm.getClusterId()).thenReturn(clusterID);
     when(scm.getScmId()).thenReturn(scmID);
@@ -229,14 +233,22 @@ class TestSCMHAManagerImpl {
     when(metadataStore.getStore()).thenReturn(dbStore);
     when(metadataStore.getTransactionInfoTable()).thenReturn(txnInfoTable);
     when(scmHANodeDetails.getLocalNodeDetails()).thenReturn(nodeDetails);
+    when(scmHANodeDetails.getPeerNodeDetails()).thenReturn(Collections.singletonList(leaderNodeDetails));
     when(blockManager.getDeletedBlockLog()).thenReturn(deletedBlockLog);
     when(dbStore.initBatchOperation()).thenReturn(batchOperation);
     when(nodeDetails.getRatisHostPortStr()).thenReturn("localhost:" +
         conf.get(ScmConfigKeys.OZONE_SCM_RATIS_PORT_KEY));
+    when(leaderNodeDetails.getRatisHostPortStr()).thenReturn("localhost:" + leaderPort);
     when(scm.getSystemClock()).thenReturn(Clock.system(ZoneOffset.UTC));
 
     final SCMHAManager manager = new SCMHAManagerImpl(conf,
-        new SecurityConfig(conf), scm);
+        new SecurityConfig(conf), scm) {
+      @Override
+      public DBCheckpoint downloadCheckpointFromLeader(String leaderId) {
+        // Mock the checkpoint downloader to return nothing.
+        return null;
+      }
+    };
     when(scm.getScmHAManager()).thenReturn(manager);
     return scm;
   }
