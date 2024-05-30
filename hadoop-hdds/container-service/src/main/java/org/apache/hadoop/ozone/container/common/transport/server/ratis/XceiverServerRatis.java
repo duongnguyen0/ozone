@@ -116,6 +116,8 @@ import static org.apache.hadoop.ozone.OzoneConfigKeys.HDDS_CONTAINER_RATIS_LOG_A
 import static org.apache.hadoop.ozone.OzoneConfigKeys.HDDS_CONTAINER_RATIS_LOG_APPENDER_QUEUE_NUM_ELEMENTS_DEFAULT;
 import static org.apache.hadoop.ozone.OzoneConfigKeys.HDDS_CONTAINER_RATIS_SEGMENT_SIZE_DEFAULT;
 import static org.apache.hadoop.ozone.OzoneConfigKeys.HDDS_CONTAINER_RATIS_SEGMENT_SIZE_KEY;
+import static org.apache.hadoop.ozone.OzoneConfigKeys.HDDS_CONTAINER_RATIS_ZEROCOPY_ENALED;
+import static org.apache.hadoop.ozone.OzoneConfigKeys.HDDS_CONTAINER_RATIS_ZEROCOPY_ENALED_DEFAULT;
 import static org.apache.ratis.util.Preconditions.assertTrue;
 
 /**
@@ -287,6 +289,11 @@ public final class XceiverServerRatis implements XceiverServerSpi {
     if (streamEnable) {
       setUpRatisStream(properties);
     }
+
+    // set zero copy enable
+    boolean zeroCopyEnabled =
+        conf.getBoolean(HDDS_CONTAINER_RATIS_ZEROCOPY_ENALED, HDDS_CONTAINER_RATIS_ZEROCOPY_ENALED_DEFAULT);
+    GrpcConfigKeys.Server.setZeroCopyEnabled(properties, zeroCopyEnabled);
 
     // Set Ratis State Machine Data configurations
     setStateMachineDataConfigurations(properties);

@@ -597,6 +597,8 @@ public class MiniOzoneClusterImpl implements MiniOzoneCluster {
       // pipeline.
       conf.setInt(HddsConfigKeys.HDDS_SCM_SAFEMODE_MIN_DATANODE,
           numOfDatanodes >= 3 ? 3 : 1);
+      // Always enable container zerocopy in test.
+      conf.setBoolean(OzoneConfigKeys.HDDS_CONTAINER_RATIS_ZEROCOPY_ENALED, true);
     }
 
     void removeConfiguration() {

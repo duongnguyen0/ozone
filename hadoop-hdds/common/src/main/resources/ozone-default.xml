@@ -340,6 +340,14 @@
     </description>
   </property>
   <property>
+    <name>hdds.container.ratis.zerocopy.enabled</name>
+    <value>false</value>
+    <tag>OZONE, RATIS, PERFORMANCE</tag>
+    <description>
+      Specify if zero-copy should be enabled for Apache Ratis on datanodes.
+    </description>
+  </property>
+  <property>
     <name>hdds.ratis.server.retry-cache.timeout.duration</name>
     <value>600000ms</value>
     <tag>OZONE, RATIS, MANAGEMENT</tag>

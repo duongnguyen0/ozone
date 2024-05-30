@@ -70,6 +70,11 @@ public final class OzoneConfigKeys {
       HDDS_CONTAINER_RATIS_DATASTREAM_RANDOM_PORT_DEFAULT =
       false;
 
+  public static final String HDDS_CONTAINER_RATIS_ZEROCOPY_ENALED =
+      "hdds.container.ratis.zerocopy.enabled";
+
+  public static final boolean HDDS_CONTAINER_RATIS_ZEROCOPY_ENALED_DEFAULT = false;
+
   public static final String HDDS_CONTAINER_CHUNK_WRITE_SYNC_KEY =
       "hdds.container.chunk.write.sync";
   public static final boolean HDDS_CONTAINER_CHUNK_WRITE_SYNC_DEFAULT = false;
