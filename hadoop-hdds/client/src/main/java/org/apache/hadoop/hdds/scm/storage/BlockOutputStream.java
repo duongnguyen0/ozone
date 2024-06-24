@@ -146,6 +146,8 @@ public class BlockOutputStream extends OutputStream {
   private final ContainerClientMetrics clientMetrics;
   private boolean allowPutBlockPiggybacking;
 
+  private volatile CompletableFuture<Void> lastFlushFuture;
+
   /**
    * Creates a new BlockOutputStream.
    *
@@ -293,16 +295,19 @@ public class BlockOutputStream extends OutputStream {
   @Override
   public void write(int b) throws IOException {
     checkOpen();
-    allocateNewBufferIfNeeded();
-    currentBuffer.put((byte) b);
-    currentBufferRemaining--;
-    writeChunkIfNeeded();
-    writtenDataLength++;
-    doFlushOrWatchIfNeeded();
+    synchronized (this) {
+      allocateNewBufferIfNeeded();
+      currentBuffer.put((byte) b);
+      currentBufferRemaining--;
+      writeChunkIfNeeded();
+      writtenDataLength++;
+      doFlushOrWatchIfNeeded();
+    }
   }
 
   private void writeChunkIfNeeded() throws IOException {
     if (currentBufferRemaining == 0) {
+      LOG.debug("WriteChunk from write(), buffer = {}", currentBuffer);
       writeChunk(currentBuffer);
     }
   }
@@ -320,17 +325,19 @@ public class BlockOutputStream extends OutputStream {
     if (len == 0) {
       return;
     }
-
-    while (len > 0) {
-      allocateNewBufferIfNeeded();
-      final int writeLen = Math.min(currentBufferRemaining, len);
-      currentBuffer.put(b, off, writeLen);
-      currentBufferRemaining -= writeLen;
-      writeChunkIfNeeded();
-      off += writeLen;
-      len -= writeLen;
-      updateWrittenDataLength(writeLen);
-      doFlushOrWatchIfNeeded();
+    synchronized (this) {
+      while (len > 0) {
+        allocateNewBufferIfNeeded();
+        final int writeLen = Math.min(currentBufferRemaining, len);
+        LOG.info("Write");
+        currentBuffer.put(b, off, writeLen);
+        currentBufferRemaining -= writeLen;
+        writeChunkIfNeeded();
+        off += writeLen;
+        len -= writeLen;
+        updateWrittenDataLength(writeLen);
+        doFlushOrWatchIfNeeded();
+      }
     }
   }
 
@@ -343,19 +350,30 @@ public class BlockOutputStream extends OutputStream {
       if (bufferPool.getNumberOfUsedBuffers() % flushPeriod == 0) {
         updateFlushLength();
         executePutBlock(false, false);
+        // TODO: get got to commit early to
+        handleFullBuffer();
       }
       // Data in the bufferPool can not exceed streamBufferMaxSize
+      //
       if (bufferPool.getNumberOfUsedBuffers() == bufferPool.getCapacity()) {
-        handleFullBuffer();
+        // handleFullBuffer()
       }
     }
   }
 
   private void allocateNewBufferIfNeeded() {
     if (currentBufferRemaining == 0) {
+      LOG.info("Allocating from {}", bufferPool);
       currentBuffer = bufferPool.allocateBuffer(config.getBufferIncrement());
       currentBufferRemaining = currentBuffer.remaining();
+      LOG.warn("Allocating new buffer {} when full. used={}, capacity = {}, buffer list {}", currentBuffer, bufferPool.getNumberOfUsedBuffers(), bufferPool.getCapacity(), bufferList == null ? 0 : bufferList.size());
     }
+  }
+
+  private void allocateNewBuffer() {
+    currentBuffer = bufferPool.allocateBuffer(config.getBufferIncrement());
+    currentBufferRemaining = currentBuffer.remaining();
+    LOG.warn("Forced allocating new buffer {}, used={}, capacity = {}, pending write {}", currentBuffer, bufferPool.getNumberOfUsedBuffers(), bufferPool.getCapacity(), bufferList == null ? 0 : bufferList.size());
   }
 
   private void updateFlushLength() {
@@ -445,6 +463,14 @@ public class BlockOutputStream extends OutputStream {
   }
 
   /**
+   * Watch for a specific commit index.
+   */
+  XceiverClientReply sendWatchForCommit(long commitIndex)
+      throws IOException {
+    return null;
+  }
+
+  /**
    * calls watchForCommit API of the Ratis Client. For Standalone client,
    * it is a no op.
    * @param bufferFull flag indicating whether bufferFull condition is hit or
@@ -472,6 +498,28 @@ public class BlockOutputStream extends OutputStream {
     refreshCurrentBuffer();
   }
 
+  private void watchForCommit(long commitIndex) throws IOException {
+    checkOpen();
+    try {
+      LOG.warn("Entering watchForCommit commitIndex = {}", commitIndex);
+      final XceiverClientReply reply = sendWatchForCommit(commitIndex);
+      if (reply != null) {
+        List<DatanodeDetails> dnList = reply.getDatanodes();
+        if (!dnList.isEmpty()) {
+          Pipeline pipe = xceiverClient.getPipeline();
+
+          LOG.warn("Failed to commit BlockId {} on {}. Failed nodes: {}",
+              blockID, pipe, dnList);
+          failedServers.addAll(dnList);
+        }
+      }
+    } catch (IOException ioe) {
+      setIoException(ioe);
+      throw getIoException();
+    }
+    LOG.warn("Leaving watchForCommit commitIndex = {}", commitIndex);
+  }
+
   void updateCommitInfo(XceiverClientReply reply, List<ChunkBuffer> buffers) {
   }
 
@@ -480,8 +528,7 @@ public class BlockOutputStream extends OutputStream {
    * @param force true if no data was written since most recent putBlock and
    *            stream is being closed
    */
-  CompletableFuture<ContainerProtos.
-      ContainerCommandResponseProto> executePutBlock(boolean close,
+  CompletableFuture<PutBlockResult> executePutBlock(boolean close,
       boolean force) throws IOException {
     checkOpen();
     long flushPos = totalDataFlushedLength;
@@ -495,11 +542,11 @@ public class BlockOutputStream extends OutputStream {
       byteBufferList = null;
     }
 
-    CompletableFuture<ContainerProtos.
-        ContainerCommandResponseProto> flushFuture = null;
+    CompletableFuture<ContainerCommandResponseProto> flushFuture = null;
+    XceiverClientReply asyncReply;
     try {
       BlockData blockData = containerBlockData.build();
-      LOG.debug("sending PutBlock {}", blockData);
+//      LOG.debug("sending PutBlock {}", blockData);
 
       if (config.getIncrementalChunkList()) {
         // remove any chunks in the containerBlockData list.
@@ -507,10 +554,8 @@ public class BlockOutputStream extends OutputStream {
         containerBlockData.clearChunks();
       }
 
-      XceiverClientReply asyncReply =
-          putBlockAsync(xceiverClient, blockData, close, tokenString);
-      CompletableFuture<ContainerProtos.ContainerCommandResponseProto> future =
-          asyncReply.getResponse();
+      asyncReply = putBlockAsync(xceiverClient, blockData, close, tokenString);
+      CompletableFuture<ContainerCommandResponseProto> future = asyncReply.getResponse();
       flushFuture = future.thenApplyAsync(e -> {
         try {
           validateResponse(e);
@@ -537,9 +582,11 @@ public class BlockOutputStream extends OutputStream {
     } catch (InterruptedException ex) {
       Thread.currentThread().interrupt();
       handleInterruptedException(ex, false);
+      // never reach, just to make compiler happy..
+      return null;
     }
     putFlushFuture(flushPos, flushFuture);
-    return flushFuture;
+    return flushFuture.thenApply(r -> new PutBlockResult(flushPos, asyncReply.getLogIndex(), r));
   }
 
   void putFlushFuture(long flushPos,
@@ -570,16 +617,16 @@ public class BlockOutputStream extends OutputStream {
     bufferList.add(buffer);
   }
 
-  private void writeChunk(ChunkBuffer buffer)
-      throws IOException {
+  private void writeChunk(ChunkBuffer buffer) throws IOException {
     writeChunkCommon(buffer);
     writeChunkToContainer(buffer.duplicate(0, buffer.position()), false);
   }
 
-  private void writeChunkAndPutBlock(ChunkBuffer buffer)
+  private CompletableFuture<PutBlockResult> writeChunkAndPutBlock(ChunkBuffer buffer)
       throws IOException {
+    LOG.info("WriteChunk and Putblock from hsync, buffer={}", buffer);
     writeChunkCommon(buffer);
-    writeChunkToContainer(buffer.duplicate(0, buffer.position()), true);
+    return writeChunkToContainer(buffer.duplicate(0, buffer.position()), true);
   }
 
   /**
@@ -607,34 +654,73 @@ public class BlockOutputStream extends OutputStream {
   private void handleFlushInternal(boolean close)
       throws IOException, InterruptedException, ExecutionException {
     checkOpen();
-    // flush the last chunk data residing on the currentBuffer
-    if (totalDataFlushedLength < writtenDataLength) {
-      refreshCurrentBuffer();
-      Preconditions.checkArgument(currentBuffer.position() > 0);
-
-      // This can be a partially filled chunk. Since we are flushing the buffer
-      // here, we just limit this buffer to the current position. So that next
-      // write will happen in new buffer
-      if (currentBuffer.hasRemaining()) {
-        if (allowPutBlockPiggybacking) {
-          updateFlushLength();
-          writeChunkAndPutBlock(currentBuffer);
-        } else {
-          writeChunk(currentBuffer);
-          updateFlushLength();
-          executePutBlock(close, false);
+    LOG.debug("Start flushing close={}", close);
+    CompletableFuture<Void> toWaitFor;
+    synchronized (this) {
+      CompletableFuture<PutBlockResult> putBlockResultFuture = null;
+      // flush the last chunk data residing on the currentBuffer
+      if (totalDataFlushedLength < writtenDataLength) {
+//        refreshCurrentBuffer();
+        if (currentBuffer.position() <= 0) {
+          LOG.debug("Something wrong with current buffer {}, pos = {}", currentBuffer, currentBuffer.position());
         }
+        Preconditions.checkArgument(currentBuffer.position() > 0);
+
+        // This can be a partially filled chunk. Since we are flushing the buffer
+        // here, we just limit this buffer to the current position. So that next
+        // write will happen in new buffer
+        if (currentBuffer.hasRemaining()) {
+          if (allowPutBlockPiggybacking) {
+            updateFlushLength();
+            putBlockResultFuture = writeChunkAndPutBlock(currentBuffer);
+          } else {
+            writeChunk(currentBuffer);
+            updateFlushLength();
+            putBlockResultFuture = executePutBlock(close, false);
+          }
+          if (!close) {
+            allocateNewBuffer();
+          }
+        } else {
+          updateFlushLength();
+          putBlockResultFuture = executePutBlock(close, false);
+          // set lastFuture.
+        }
+      } else if (close) {
+        // forcing an "empty" putBlock if stream is being closed without new
+        // data since latest flush - we need to send the "EOF" flag
+        putBlockResultFuture = executePutBlock(true, true);
       } else {
-        updateFlushLength();
-        executePutBlock(close, false);
+        LOG.debug("Flushing without data");
       }
-    } else if (close) {
-      // forcing an "empty" putBlock if stream is being closed without new
-      // data since latest flush - we need to send the "EOF" flag
-      executePutBlock(true, true);
+
+      if (putBlockResultFuture != null) {
+        this.lastFlushFuture = putBlockResultFuture.thenAccept(x -> {
+          try {
+            watchForCommit(x.commitIndex);
+          } catch (IOException e) {
+            throw new FlushRuntimeException(e);
+          }
+        });
+      }
+      toWaitFor = this.lastFlushFuture;
+    } // End of synchronized block.
+
+    // TODO, no needs to wait for all flush future, just the one created by this action?
+//    waitOnFlushFutures();
+
+    if (toWaitFor != null) {
+      LOG.debug("Waiting for flush");
+      try {
+        toWaitFor.get();
+      } catch (ExecutionException ex) {
+        if (ex.getCause() instanceof FlushRuntimeException) {
+          throw ((FlushRuntimeException) ex.getCause()).cause;
+        }
+      }
     }
-    waitOnFlushFutures();
-    watchForCommit(false);
+    LOG.debug("Flush done.");
+
     // just check again if the exception is hit while waiting for the
     // futures to ensure flush has indeed succeeded
 
@@ -662,7 +748,7 @@ public class BlockOutputStream extends OutputStream {
   }
 
   void validateResponse(
-      ContainerProtos.ContainerCommandResponseProto responseProto)
+      ContainerCommandResponseProto responseProto)
       throws IOException {
     try {
       // if the ioException is already set, it means a prev request has failed
@@ -742,7 +828,20 @@ public class BlockOutputStream extends OutputStream {
    * checksum
    * @return
    */
-  CompletableFuture<ContainerCommandResponseProto> writeChunkToContainer(
+  CompletableFuture<ContainerCommandResponseProto> writeChunkToContainer(ChunkBuffer chunk) throws IOException {
+    return writeChunkToContainer(chunk, false).thenApply(x -> x.response);
+  }
+
+  /**
+   * Writes buffered data as a new chunk to the container and saves chunk
+   * information to be used later in putKey call.
+   *
+   * @throws IOException if there is an I/O error while performing the call
+   * @throws OzoneChecksumException if there is an error while computing
+   * checksum
+   * @return
+   */
+  private CompletableFuture<PutBlockResult> writeChunkToContainer(
       ChunkBuffer chunk, boolean putBlockPiggybacking) throws IOException {
     int effectiveChunkSize = chunk.remaining();
     final long offset = chunkOffset.getAndAdd(effectiveChunkSize);
@@ -776,8 +875,9 @@ public class BlockOutputStream extends OutputStream {
     }
 
     final List<ChunkBuffer> byteBufferList;
-    CompletableFuture<ContainerProtos.ContainerCommandResponseProto>
+    CompletableFuture<ContainerCommandResponseProto>
         validateFuture = null;
+    XceiverClientReply asyncReply;
     try {
       BlockData blockData = null;
 
@@ -793,7 +893,7 @@ public class BlockOutputStream extends OutputStream {
         Preconditions.checkNotNull(byteBufferList);
 
         blockData = containerBlockData.build();
-        LOG.debug("piggyback chunk list {}", blockData);
+//        LOG.debug("piggyback chunk list {}", blockData);
 
         if (config.getIncrementalChunkList()) {
           // remove any chunks in the containerBlockData list.
@@ -804,9 +904,9 @@ public class BlockOutputStream extends OutputStream {
         byteBufferList = null;
       }
 
-      XceiverClientReply asyncReply = writeChunkAsync(xceiverClient, chunkInfo,
+      asyncReply = writeChunkAsync(xceiverClient, chunkInfo,
           blockID.get(), data, tokenString, replicationIndex, blockData);
-      CompletableFuture<ContainerProtos.ContainerCommandResponseProto>
+      CompletableFuture<ContainerCommandResponseProto>
           respFuture = asyncReply.getResponse();
       validateFuture = respFuture.thenApplyAsync(e -> {
         try {
@@ -835,11 +935,13 @@ public class BlockOutputStream extends OutputStream {
     } catch (InterruptedException ex) {
       Thread.currentThread().interrupt();
       handleInterruptedException(ex, false);
+      // never reach.
+      return null;
     }
     if (putBlockPiggybacking) {
       putFlushFuture(flushPos, validateFuture);
     }
-    return validateFuture;
+    return validateFuture.thenApply(x -> new PutBlockResult(flushPos, asyncReply.getLogIndex(), x));
   }
 
   private void handleSuccessfulPutBlock(
@@ -912,7 +1014,7 @@ public class BlockOutputStream extends OutputStream {
       throws OzoneChecksumException {
     // create chunk info for lastChunkBuffer
     ChunkInfo lastChunkInfo = createChunkInfo(lastChunkOffset);
-    LOG.debug("lastChunkInfo = {}", lastChunkInfo);
+//    LOG.debug("lastChunkInfo = {}", lastChunkInfo);
     long lastChunkSize = lastChunkInfo.getLen();
     addToBlockData(lastChunkInfo);
 
@@ -1005,11 +1107,11 @@ public class BlockOutputStream extends OutputStream {
   }
 
   private void addToBlockData(ChunkInfo revisedChunkInfo) {
-    LOG.debug("containerBlockData chunk: {}", containerBlockData);
+//    LOG.debug("containerBlockData chunk: {}", containerBlockData);
     if (containerBlockData.getChunksCount() > 0) {
       ChunkInfo lastChunk = containerBlockData.getChunks(
           containerBlockData.getChunksCount() - 1);
-      LOG.debug("revisedChunkInfo chunk: {}", revisedChunkInfo);
+//      LOG.debug("revisedChunkInfo chunk: {}", revisedChunkInfo);
       Preconditions.checkState(lastChunk.getOffset() + lastChunk.getLen() ==
           revisedChunkInfo.getOffset(),
             "lastChunk.getOffset() + lastChunk.getLen() " +
@@ -1059,5 +1161,27 @@ public class BlockOutputStream extends OutputStream {
    */
   public int getReplicationIndex() {
     return replicationIndex;
+  }
+
+  static class PutBlockResult {
+    final long flushPosition;
+    final long commitIndex;
+    final ContainerCommandResponseProto response;
+
+    PutBlockResult(long flushPosition, long commitIndex, ContainerCommandResponseProto response) {
+      this.flushPosition = flushPosition;
+      this.commitIndex = commitIndex;
+      this.response = response;
+    }
+  }
+
+  /**
+   * RuntimeException to wrap watchForCommit errors when running asynchronously.
+   */
+  private class FlushRuntimeException extends RuntimeException {
+    final IOException cause;
+    public FlushRuntimeException(IOException cause) {
+      this.cause = cause;
+    }
   }
 }

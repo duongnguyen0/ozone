@@ -192,7 +192,7 @@ public class KeyOutputStream extends OutputStream
    * @throws IOException
    */
   @Override
-  public synchronized void write(byte[] b, int off, int len)
+  public void write(byte[] b, int off, int len)
       throws IOException {
     checkNotClosed();
     if (b == null) {
@@ -205,8 +205,10 @@ public class KeyOutputStream extends OutputStream
     if (len == 0) {
       return;
     }
-    handleWrite(b, off, len, false);
-    writeOffset += len;
+    synchronized (this) {
+      handleWrite(b, off, len, false);
+      writeOffset += len;
+    }
   }
 
   private void handleWrite(byte[] b, int off, long len, boolean retry)
@@ -443,7 +445,7 @@ public class KeyOutputStream extends OutputStream
   }
 
   @Override
-  public synchronized void hsync() throws IOException {
+  public void hsync() throws IOException {
     if (replication.getReplicationType() != ReplicationType.RATIS) {
       throw new UnsupportedOperationException(
           "Replication type is not " + ReplicationType.RATIS);
@@ -455,9 +457,12 @@ public class KeyOutputStream extends OutputStream
     checkNotClosed();
     final long hsyncPos = writeOffset;
     handleFlushOrClose(StreamAction.HSYNC);
-    Preconditions.checkState(offset >= hsyncPos,
-        "offset = %s < hsyncPos = %s", offset, hsyncPos);
-    blockOutputStreamEntryPool.hsyncKey(hsyncPos);
+    synchronized (this) {
+      // TODO: when there're concurrent hsync calls, they can be out of order.
+      Preconditions.checkState(offset >= hsyncPos,
+          "offset = %s < hsyncPos = %s", offset, hsyncPos);
+      blockOutputStreamEntryPool.hsyncKey(hsyncPos);
+    }
   }
 
   /**

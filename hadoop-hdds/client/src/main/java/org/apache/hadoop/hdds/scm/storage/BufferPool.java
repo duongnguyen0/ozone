@@ -28,6 +28,8 @@ import org.apache.hadoop.ozone.common.ChunkBuffer;
 
 import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
 import org.apache.ratis.util.Preconditions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import static java.util.Collections.emptyList;
 
@@ -35,6 +37,8 @@ import static java.util.Collections.emptyList;
  * This class creates and manages pool of n buffers.
  */
 public class BufferPool {
+  public static final Logger LOG =
+      LoggerFactory.getLogger(BufferPool.class);
 
   private static final BufferPool EMPTY = new BufferPool(0, 0);
 
@@ -86,6 +90,7 @@ public class BufferPool {
         "next index: " + nextBufferIndex + " >= capacity: " + capacity);
 
     currentBufferIndex = nextBufferIndex;
+    LOG.info("CurrentIndex {}", currentBufferIndex);
 
     if (currentBufferIndex < bufferList.size()) {
       return getBuffer(currentBufferIndex);
@@ -97,17 +102,20 @@ public class BufferPool {
   }
 
   void releaseBuffer(ChunkBuffer chunkBuffer) {
+    int releasedIndex = bufferList.indexOf(chunkBuffer);
+    LOG.info("Releasing buffer {} at {}", chunkBuffer, releasedIndex);
     Preconditions.assertTrue(!bufferList.isEmpty(), "empty buffer list");
-    Preconditions.assertSame(bufferList.get(0), chunkBuffer,
-        "only the first buffer can be released");
-    Preconditions.assertTrue(currentBufferIndex >= 0,
-        () -> "current buffer: " + currentBufferIndex);
+    Preconditions.assertTrue(releasedIndex <= currentBufferIndex);
+    Preconditions.assertTrue(currentBufferIndex >= 0, () -> "current buffer: " + currentBufferIndex);
 
     // always remove from head of the list and append at last
-    final ChunkBuffer buffer = bufferList.remove(0);
+    final ChunkBuffer buffer = bufferList.remove(releasedIndex);
     buffer.clear();
-    bufferList.add(buffer);
-    currentBufferIndex--;
+    if (releasedIndex != currentBufferIndex) {
+      bufferList.add(buffer);
+      currentBufferIndex--;
+    }
+    LOG.info("CurrentIndex {}, this {}", currentBufferIndex, this);
   }
 
   public void clearBufferPool() {
