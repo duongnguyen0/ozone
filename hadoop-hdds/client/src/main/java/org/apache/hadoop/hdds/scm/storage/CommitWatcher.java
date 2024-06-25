@@ -59,14 +59,15 @@ class CommitWatcher extends AbstractCommitWatcher<ChunkBuffer> {
       acked += buffer.position();
       bufferPool.releaseBuffer(buffer);
     }
-    final long totalLength = addAckDataLength(acked);
+//    final long totalLength = addAckDataLength(acked);
     // When putBlock is called, a future is added.
     // When putBlock is replied, the future is removed below.
     // Therefore, the removed future should not be null.
-    final CompletableFuture<ContainerCommandResponseProto> removed =
-        futureMap.remove(totalLength);
-    Objects.requireNonNull(removed, () -> "Future not found for "
-        + totalLength + ": existing = " + futureMap.keySet());
+    // TODO move the flush future map to BOS.
+//    final CompletableFuture<ContainerCommandResponseProto> removed =
+//        futureMap.remove(totalLength);
+//    Objects.requireNonNull(removed, () -> "Future not found for "
+//        + totalLength + ": existing = " + futureMap.keySet());
   }
 
   @VisibleForTesting

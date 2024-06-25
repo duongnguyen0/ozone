@@ -154,7 +154,7 @@ public class TestHSync {
   private static final BucketLayout BUCKET_LAYOUT = BucketLayout.FILE_SYSTEM_OPTIMIZED;
 
   private static final int CHUNK_SIZE = 4 << 12;
-  private static final int FLUSH_SIZE = 2 * CHUNK_SIZE;
+  private static final int FLUSH_SIZE = 3 * CHUNK_SIZE;
   private static final int MAX_FLUSH_SIZE = 2 * FLUSH_SIZE;
   private static final int BLOCK_SIZE = 2 * MAX_FLUSH_SIZE;
   private static final int SERVICE_INTERVAL = 100;
@@ -707,26 +707,33 @@ public class TestHSync {
   }
 
   public static Stream<Arguments> concurrentWriteHSync() {
+    // We're testing with flush-size = 3 chunk-size, and max-flush-size=6.
+    // Total chunk buffers that writer can occupite is 4 (3 inflight for flush and 1 to accommodate current writes).
+    // so, there're 2 chunk buffers left for sync threads to
     return Stream.of(
         Arguments.of(1, 1),
         Arguments.of(2, 1),
         Arguments.of(4, 1),
         Arguments.of(6, 2),
-        Arguments.of(8, 2)
+        Arguments.of(8, 2),
+        // this may fail.
+        Arguments.of(8, 3),
+        // this may fail.
+        Arguments.of(8, 4)
     );
   }
 
   @ParameterizedTest
   @MethodSource("concurrentWriteHSync")
-  public void testConcurrentWriteHSync(int initialDataSize, int syncThreadsCount) throws Exception {
+  public void testConcurrentWriteHSync(int writeSampleSize, int syncThreadsCount) throws Exception {
     final String rootPath = String.format("%s://%s/", OZONE_OFS_URI_SCHEME, CONF.get(OZONE_OM_ADDRESS_KEY));
     CONF.set(CommonConfigurationKeysPublic.FS_DEFAULT_NAME_KEY, rootPath);
 
     final String dir = OZONE_ROOT + bucket.getVolumeName() + OZONE_URI_DELIMITER + bucket.getName();
 
     try (FileSystem fs = FileSystem.get(CONF)) {
-      final Path file = new Path(dir, "file" + initialDataSize);
-      byte[] data = new byte[initialDataSize];
+      final Path file = new Path(dir, "file" + writeSampleSize);
+      byte[] data = new byte[writeSampleSize];
       ThreadLocalRandom.current().nextBytes(data);
       int writes;
       try (FSDataOutputStream out = fs.create(file, true)) {

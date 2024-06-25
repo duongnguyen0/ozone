@@ -124,6 +124,10 @@ public class RatisBlockOutputStream extends BlockOutputStream
 
   @Override
   void waitOnFlushFutures() throws InterruptedException, ExecutionException {
+    CompletableFuture<Void> flushFuture = this.lastFlushFuture;
+    if (flushFuture != null) {
+      flushFuture.get();
+    }
     commitWatcher.waitOnFlushFutures();
   }
 
@@ -144,7 +148,7 @@ public class RatisBlockOutputStream extends BlockOutputStream
 //      if (getBufferPool() != null && getBufferPool().getSize() > 0) {
         handleFlush(false);
 //      } else {
-        // TODO: revisit this again, it make the test failing.
+        // TODO: revisit this again, it makes the test failing.
 //        waitForFlushAndCommit(false);
 //      }
     }

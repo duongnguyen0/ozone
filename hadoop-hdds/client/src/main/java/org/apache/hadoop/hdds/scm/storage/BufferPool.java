@@ -70,7 +70,7 @@ public class BufferPool {
     return byteStringConversion;
   }
 
-  ChunkBuffer getCurrentBuffer() {
+  synchronized ChunkBuffer getCurrentBuffer() {
     return currentBufferIndex == -1 ? null : bufferList.get(currentBufferIndex);
   }
 
@@ -83,7 +83,7 @@ public class BufferPool {
    * less than the capacity to be allocated, just allocate a buffer of size
    * chunk size.
    */
-  public ChunkBuffer allocateBuffer(int increment) {
+  public synchronized ChunkBuffer allocateBuffer(int increment) {
     final int nextBufferIndex = currentBufferIndex + 1;
 
     Preconditions.assertTrue(nextBufferIndex < capacity, () ->
@@ -101,9 +101,9 @@ public class BufferPool {
     }
   }
 
-  void releaseBuffer(ChunkBuffer chunkBuffer) {
+  synchronized void releaseBuffer(ChunkBuffer chunkBuffer) {
     int releasedIndex = bufferList.indexOf(chunkBuffer);
-    LOG.info("Releasing buffer {} at {}", chunkBuffer, releasedIndex);
+    LOG.info("Releasing buffer {} at {}, used={}", chunkBuffer, releasedIndex, getNumberOfUsedBuffers());
     Preconditions.assertTrue(!bufferList.isEmpty(), "empty buffer list");
     Preconditions.assertTrue(releasedIndex <= currentBufferIndex);
     Preconditions.assertTrue(currentBufferIndex >= 0, () -> "current buffer: " + currentBufferIndex);
@@ -111,14 +111,12 @@ public class BufferPool {
     // always remove from head of the list and append at last
     final ChunkBuffer buffer = bufferList.remove(releasedIndex);
     buffer.clear();
-    if (releasedIndex != currentBufferIndex) {
-      bufferList.add(buffer);
-      currentBufferIndex--;
-    }
-    LOG.info("CurrentIndex {}, this {}", currentBufferIndex, this);
+    bufferList.add(buffer);
+    currentBufferIndex--;
+    LOG.info("Released buffer, used= {}", this.getNumberOfUsedBuffers());
   }
 
-  public void clearBufferPool() {
+  synchronized public void clearBufferPool() {
     bufferList.forEach(ChunkBuffer::close);
     bufferList.clear();
     currentBufferIndex = -1;

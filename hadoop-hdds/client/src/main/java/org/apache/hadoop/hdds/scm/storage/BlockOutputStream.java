@@ -146,7 +146,7 @@ public class BlockOutputStream extends OutputStream {
   private final ContainerClientMetrics clientMetrics;
   private boolean allowPutBlockPiggybacking;
 
-  private volatile CompletableFuture<Void> lastFlushFuture;
+  protected volatile CompletableFuture<Void> lastFlushFuture;
 
   /**
    * Creates a new BlockOutputStream.
@@ -364,17 +364,18 @@ public class BlockOutputStream extends OutputStream {
 
   private void allocateNewBufferIfNeeded() {
     if (currentBufferRemaining == 0) {
-      LOG.info("Allocating from {}", bufferPool);
       currentBuffer = bufferPool.allocateBuffer(config.getBufferIncrement());
       currentBufferRemaining = currentBuffer.remaining();
-      LOG.warn("Allocating new buffer {} when full. used={}, capacity = {}, buffer list {}", currentBuffer, bufferPool.getNumberOfUsedBuffers(), bufferPool.getCapacity(), bufferList == null ? 0 : bufferList.size());
+      LOG.debug("Allocated new buffer {} when full. used={}, capacity = {}",
+          currentBuffer, bufferPool.getNumberOfUsedBuffers(), bufferPool.getCapacity());
     }
   }
 
   private void allocateNewBuffer() {
     currentBuffer = bufferPool.allocateBuffer(config.getBufferIncrement());
     currentBufferRemaining = currentBuffer.remaining();
-    LOG.warn("Forced allocating new buffer {}, used={}, capacity = {}, pending write {}", currentBuffer, bufferPool.getNumberOfUsedBuffers(), bufferPool.getCapacity(), bufferList == null ? 0 : bufferList.size());
+    LOG.debug("Allocated new buffer {} when full. used={}, capacity = {}",
+        currentBuffer, bufferPool.getNumberOfUsedBuffers(), bufferPool.getCapacity());
   }
 
   private void updateFlushLength() {
@@ -625,7 +626,7 @@ public class BlockOutputStream extends OutputStream {
 
   private CompletableFuture<PutBlockResult> writeChunkAndPutBlock(ChunkBuffer buffer)
       throws IOException {
-    LOG.info("WriteChunk and Putblock from hsync, buffer={}", buffer);
+    LOG.info("WriteChunk and Putblock from flush, buffer={}", buffer);
     writeChunkCommon(buffer);
     return writeChunkToContainer(buffer.duplicate(0, buffer.position()), true);
   }
@@ -662,9 +663,6 @@ public class BlockOutputStream extends OutputStream {
       // flush the last chunk data residing on the currentBuffer
       if (totalDataFlushedLength < writtenDataLength) {
 //        refreshCurrentBuffer();
-        if (currentBuffer.position() <= 0) {
-          LOG.debug("Something wrong with current buffer {}, pos = {}", currentBuffer, currentBuffer.position());
-        }
         Preconditions.checkArgument(currentBuffer.position() > 0);
 
         // This can be a partially filled chunk. Since we are flushing the buffer
