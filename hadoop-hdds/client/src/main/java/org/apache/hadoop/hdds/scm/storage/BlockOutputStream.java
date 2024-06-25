@@ -302,6 +302,7 @@ public class BlockOutputStream extends OutputStream {
       writeChunkIfNeeded();
       writtenDataLength++;
       doFlushOrWatchIfNeeded();
+      allocateNewBufferIfNeeded();
     }
   }
 
@@ -309,6 +310,7 @@ public class BlockOutputStream extends OutputStream {
     if (currentBufferRemaining == 0) {
       LOG.debug("WriteChunk from write(), buffer = {}", currentBuffer);
       writeChunk(currentBuffer);
+      updateFlushLength();
     }
   }
 
@@ -329,14 +331,14 @@ public class BlockOutputStream extends OutputStream {
       while (len > 0) {
         allocateNewBufferIfNeeded();
         final int writeLen = Math.min(currentBufferRemaining, len);
-        LOG.info("Write");
         currentBuffer.put(b, off, writeLen);
         currentBufferRemaining -= writeLen;
+        updateWrittenDataLength(writeLen);
         writeChunkIfNeeded();
         off += writeLen;
         len -= writeLen;
-        updateWrittenDataLength(writeLen);
         doFlushOrWatchIfNeeded();
+        allocateNewBufferIfNeeded();
       }
     }
   }
@@ -348,7 +350,6 @@ public class BlockOutputStream extends OutputStream {
   private void doFlushOrWatchIfNeeded() throws IOException {
     if (currentBufferRemaining == 0) {
       if (bufferPool.getNumberOfUsedBuffers() % flushPeriod == 0) {
-        updateFlushLength();
         executePutBlock(false, false);
         // TODO: get got to commit early to
         handleFullBuffer();
@@ -670,12 +671,11 @@ public class BlockOutputStream extends OutputStream {
         // here, we just limit this buffer to the current position. So that next
         // write will happen in new buffer
         if (currentBuffer.hasRemaining()) {
+          updateFlushLength();
           if (allowPutBlockPiggybacking) {
-            updateFlushLength();
             putBlockResultFuture = writeChunkAndPutBlock(currentBuffer);
           } else {
             writeChunk(currentBuffer);
-            updateFlushLength();
             putBlockResultFuture = executePutBlock(close, false);
           }
           if (!close) {
