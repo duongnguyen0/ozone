@@ -719,12 +719,9 @@ public class BlockOutputStream extends OutputStream {
     }
     LOG.debug("Flush done.");
 
-    // just check again if the exception is hit while waiting for the
-    // futures to ensure flush has indeed succeeded
-
-    // irrespective of whether the commitIndex2flushedDataMap is empty
-    // or not, ensure there is no exception set
-    checkOpen();
+    // When hsync and write happens in parallel, the current stream may be already full/closed while waiting.
+    // It's nonsense to assert open here.
+    // checkOpen();
   }
 
   @Override

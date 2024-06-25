@@ -360,7 +360,7 @@ public class KeyOutputStream extends OutputStream
     }
   }
 
-  private void markStreamClosed() {
+  private synchronized void markStreamClosed() {
     blockOutputStreamEntryPool.cleanup();
     closed = true;
   }

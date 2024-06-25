@@ -674,7 +674,6 @@ public class TestHSync {
       while ((Time.monotonicNow() - start < 10000)) {
         try {
           out.hsync();
-          System.out.println("Calling hsync");
         } catch (Exception e) {
           syncerException.set(e);
           throw new RuntimeException(e);
