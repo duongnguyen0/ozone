@@ -112,8 +112,11 @@ public class BlockOutputStream extends OutputStream {
   private final AtomicReference<IOException> ioException;
   private final ExecutorService responseExecutor;
 
-  // the effective length of data flushed so far
+  // the effective length of data sent to datanodes (via writeChunk).
   private long totalDataFlushedLength;
+
+  // The effective length of data committed to datanodes (via putBlock).
+  private long totalCommittedData;
 
   // effective data write attempted so far for the block
   private long writtenDataLength;
@@ -350,6 +353,7 @@ public class BlockOutputStream extends OutputStream {
   private void doFlushOrWatchIfNeeded() throws IOException {
     if (currentBufferRemaining == 0) {
       if (bufferPool.getNumberOfUsedBuffers() % flushPeriod == 0) {
+        updateCommittedLength();
         executePutBlock(false, false);
         // TODO: get got to commit early to
         handleFullBuffer();
@@ -380,6 +384,10 @@ public class BlockOutputStream extends OutputStream {
 
   private void updateFlushLength() {
     totalDataFlushedLength = writtenDataLength;
+  }
+
+  private void updateCommittedLength() {
+    totalCommittedData = totalDataFlushedLength;
   }
 
   /**
@@ -662,7 +670,6 @@ public class BlockOutputStream extends OutputStream {
       CompletableFuture<PutBlockResult> putBlockResultFuture = null;
       // flush the last chunk data residing on the currentBuffer
       if (totalDataFlushedLength < writtenDataLength) {
-//        refreshCurrentBuffer();
         Preconditions.checkArgument(currentBuffer.position() > 0);
 
         // This can be a partially filled chunk. Since we are flushing the buffer
@@ -670,6 +677,7 @@ public class BlockOutputStream extends OutputStream {
         // write will happen in new buffer
         if (currentBuffer.hasRemaining()) {
           updateFlushLength();
+          updateCommittedLength();
           if (allowPutBlockPiggybacking) {
             putBlockResultFuture = writeChunkAndPutBlock(currentBuffer);
           } else {
@@ -681,12 +689,18 @@ public class BlockOutputStream extends OutputStream {
           }
         } else {
           updateFlushLength();
+          updateCommittedLength();
           putBlockResultFuture = executePutBlock(close, false);
           // set lastFuture.
         }
+      } else if (totalCommittedData < totalDataFlushedLength) {
+        // There're no pending written data, but there're uncommitted data.
+        updateCommittedLength();
+        putBlockResultFuture = executePutBlock(close, false);
       } else if (close) {
         // forcing an "empty" putBlock if stream is being closed without new
         // data since latest flush - we need to send the "EOF" flag
+        updateCommittedLength();
         putBlockResultFuture = executePutBlock(true, true);
       } else {
         LOG.debug("Flushing without data");
