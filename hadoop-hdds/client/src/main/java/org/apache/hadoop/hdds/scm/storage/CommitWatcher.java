@@ -29,7 +29,6 @@ import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos.ContainerC
 import org.apache.hadoop.hdds.scm.XceiverClientSpi;
 import org.apache.hadoop.ozone.common.ChunkBuffer;
 
-import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -59,15 +58,21 @@ class CommitWatcher extends AbstractCommitWatcher<ChunkBuffer> {
       acked += buffer.position();
       bufferPool.releaseBuffer(buffer);
     }
-//    final long totalLength = addAckDataLength(acked);
+    // TODO move the flush future map to BOS:
+    //  When there are concurrent watchForCommits, there's no guarantee of the order of execution
+    //  and the following logic to address the flushed length become irrelevant.
+    //  The flush future should be handled by BlockOutputStream and use the flushIndex which is a result of
+    //  executePutBlock.
+
+   // final long totalLength = addAckDataLength(acked);
     // When putBlock is called, a future is added.
     // When putBlock is replied, the future is removed below.
     // Therefore, the removed future should not be null.
-    // TODO move the flush future map to BOS.
-//    final CompletableFuture<ContainerCommandResponseProto> removed =
-//        futureMap.remove(totalLength);
-//    Objects.requireNonNull(removed, () -> "Future not found for "
-//        + totalLength + ": existing = " + futureMap.keySet());
+    //
+    // final CompletableFuture<ContainerCommandResponseProto> removed =
+    //     futureMap.remove(totalLength);
+    // Objects.requireNonNull(removed, () -> "Future not found for "
+    //     + totalLength + ": existing = " + futureMap.keySet());
   }
 
   @VisibleForTesting

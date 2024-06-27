@@ -205,10 +205,10 @@ public class TestHSync {
 
     // Enable DEBUG level logging for relevant classes
     GenericTestUtils.setLogLevel(BlockManagerImpl.LOG, Level.DEBUG);
-//    GenericTestUtils.setLogLevel(AbstractDatanodeStore.LOG, Level.DEBUG);
+    GenericTestUtils.setLogLevel(AbstractDatanodeStore.LOG, Level.DEBUG);
     GenericTestUtils.setLogLevel(BlockOutputStream.LOG, Level.DEBUG);
     GenericTestUtils.setLogLevel(BlockInputStream.LOG, Level.DEBUG);
-//    GenericTestUtils.setLogLevel(KeyValueHandler.LOG, Level.DEBUG);
+    GenericTestUtils.setLogLevel(KeyValueHandler.LOG, Level.DEBUG);
 
     openKeyCleanupService =
         (OpenKeyCleanupService) cluster.getOzoneManager().getKeyManager().getOpenKeyCleanupService();
@@ -628,24 +628,40 @@ public class TestHSync {
     out.writeAndHsync(data);
 
     final byte[] buffer = new byte[4 << 10];
-    int offset = 0;
-    try (FSDataInputStream in = fs.open(file)) {
-      final long skipped = in.skip(length);
-      assertEquals(length, skipped);
+    AtomicInteger attempted = new AtomicInteger();
 
-      for (; ;) {
-        final int n = in.read(buffer, 0, buffer.length);
-        if (n <= 0) {
-          break;
+    // hsync returns when all datanodes acknowledge they have received the PutBlock request. Yet, the PutBlock
+    // may not been applied to their database. So, an immediate read right after hsync may not see the synced data
+    // yet. This does not violate hsync guarantee: it ensures all current pending data becomes persistent.
+    GenericTestUtils.waitFor(() -> {
+      attempted.addAndGet(1);
+      int offset = 0;
+      try (FSDataInputStream in = fs.open(file)) {
+        final long skipped = in.skip(length);
+        assertEquals(length, skipped);
+
+        for (; ;) {
+          final int n = in.read(buffer, 0, buffer.length);
+          if (n <= 0) {
+            break;
+          }
+          for (int i = 0; i < n; i++) {
+            assertEquals(data[offset + i], buffer[i], "expected at offset " + offset + " i=" + i);
+          }
+          offset += n;
         }
-        for (int i = 0; i < n; i++) {
-          assertEquals(data[offset + i], buffer[i],
-              "expected at offset " + offset + " i=" + i);
+        if (offset != data.length) {
+          LOG.error("Read attempt #{} failed. offset {}, expected data.length {}", attempted, offset, data.length);
+          return false;
+        } else {
+          LOG.debug("Read attempt #{} succeeded. offset {}, expected data.length {}", attempted, offset, data.length);
+          return true;
         }
-        offset += n;
+      } catch (IOException e) {
+        LOG.error("Exception is thrown during read", e);
+        return false;
       }
-    }
-    assertEquals(data.length, offset);
+    }, 500, 3000);
   }
 
   private int runConcurrentWriteHSync(Path file,
@@ -707,8 +723,9 @@ public class TestHSync {
 
   public static Stream<Arguments> concurrentWriteHSync() {
     // We're testing with flush-size = 3 chunk-size, and max-flush-size=6.
-    // Total chunk buffers that writer can occupite is 4 (3 inflight for flush and 1 to accommodate current writes).
-    // so, there're 2 chunk buffers left for sync threads to
+    // Total chunk buffers that writer can occupied is 4 (3 inflight for flush and 1 to accommodate current writes).
+    // so, 2 chunk buffers left for sync threads to use. This mean tests with more than 2 sync threads may fail now.
+    // After HDDS-11073, this will no longer be a problem.
     return Stream.of(
         Arguments.of(1, 1),
         Arguments.of(2, 1),

@@ -124,7 +124,7 @@ public class RatisBlockOutputStream extends BlockOutputStream
 
   @Override
   void waitOnFlushFutures() throws InterruptedException, ExecutionException {
-    CompletableFuture<Void> flushFuture = this.lastFlushFuture;
+    CompletableFuture<Void> flushFuture = getLastFlushFuture();
     if (flushFuture != null) {
       flushFuture.get();
     }
@@ -144,13 +144,7 @@ public class RatisBlockOutputStream extends BlockOutputStream
   @Override
   public void hsync() throws IOException {
     if (!isClosed()) {
-//      System.out.println("Calling hsycn when poolSize=" + getBufferPool().getSize());
-//      if (getBufferPool() != null && getBufferPool().getSize() > 0) {
-        handleFlush(false);
-//      } else {
-        // TODO: revisit this again, it makes the test failing.
-//        waitForFlushAndCommit(false);
-//      }
+      handleFlush(false);
     }
   }
 }

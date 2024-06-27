@@ -458,7 +458,6 @@ public class KeyOutputStream extends OutputStream
     final long hsyncPos = writeOffset;
     handleFlushOrClose(StreamAction.HSYNC);
     synchronized (this) {
-      // TODO: when there're concurrent hsync calls, they can be out of order.
       Preconditions.checkState(offset >= hsyncPos,
           "offset = %s < hsyncPos = %s", offset, hsyncPos);
       blockOutputStreamEntryPool.hsyncKey(hsyncPos);

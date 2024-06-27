@@ -199,7 +199,7 @@ public class ECBlockOutputStream extends BlockOutputStream {
       ContainerCommandResponseProto> executePutBlock(boolean close,
       boolean force, long blockGroupLength) throws IOException {
     updateBlockGroupLengthInPutBlockMeta(blockGroupLength);
-    return executePutBlock(close, force).thenApply(r -> r.response);
+    return executePutBlock(close, force).thenApply(PutBlockResult::getResponse);
   }
 
   private void updateBlockGroupLengthInPutBlockMeta(final long blockGroupLen) {
@@ -277,7 +277,6 @@ public class ECBlockOutputStream extends BlockOutputStream {
       return null;
     }
     this.putBlkRspFuture = flushFuture;
-    // TODO: dirty work for EC, the abstraction on top of EC and Ratis is wrong.
     return flushFuture.thenApply(r -> new PutBlockResult(0, 0, r));
   }
 
