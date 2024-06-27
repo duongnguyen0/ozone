@@ -238,7 +238,7 @@ public class BlockOutputStream extends OutputStream {
     return true;
   }
 
-  void refreshCurrentBuffer() {
+  synchronized void refreshCurrentBuffer() {
     currentBuffer = bufferPool.getCurrentBuffer();
     currentBufferRemaining =
         currentBuffer != null ? currentBuffer.remaining() : 0;
@@ -361,9 +361,9 @@ public class BlockOutputStream extends OutputStream {
       }
       // Data in the bufferPool can not exceed streamBufferMaxSize
       //
-      if (bufferPool.getNumberOfUsedBuffers() == bufferPool.getCapacity()) {
-        // handleFullBuffer()
-      }
+//      if (bufferPool.getNumberOfUsedBuffers() == bufferPool.getCapacity()) {
+//        // handleFullBuffer()
+//      }
     }
   }
 
