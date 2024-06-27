@@ -1187,7 +1187,7 @@ public class BlockOutputStream extends OutputStream {
    */
   private static class FlushRuntimeException extends RuntimeException {
     private final IOException cause;
-    public FlushRuntimeException(IOException cause) {
+    FlushRuntimeException(IOException cause) {
       this.cause = cause;
     }
   }
