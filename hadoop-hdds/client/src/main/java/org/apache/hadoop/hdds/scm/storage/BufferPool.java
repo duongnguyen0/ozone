@@ -20,8 +20,13 @@ package org.apache.hadoop.hdds.scm.storage;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import org.apache.hadoop.hdds.scm.ByteStringConversion;
 import org.apache.hadoop.ozone.common.ChunkBuffer;
@@ -31,22 +36,27 @@ import org.apache.ratis.util.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static java.util.Collections.emptyList;
-
 /**
- * This class creates and manages pool of n buffers.
+ * A bounded pool implementation that provides {@link ChunkBuffer}s. This pool allows allocating and releasing
+ * {@link ChunkBuffer}.
+ * This pool is designed for concurrent access to allocation and release. It imposes a maximum number of buffers to be
+ * allocated at the same time and once the limit has been approached, the thread requesting a new allocation needs to
+ * wait until a allocated buffer is released.
  */
 public class BufferPool {
-  public static final Logger LOG =
-      LoggerFactory.getLogger(BufferPool.class);
+  public static final Logger LOG = LoggerFactory.getLogger(BufferPool.class);
 
   private static final BufferPool EMPTY = new BufferPool(0, 0);
-
-  private final List<ChunkBuffer> bufferList;
-  private int currentBufferIndex;
   private final int bufferSize;
   private final int capacity;
   private final Function<ByteBuffer, ByteString> byteStringConversion;
+
+  private final LinkedList<ChunkBuffer> allocated = new LinkedList<>();
+  private final LinkedList<ChunkBuffer> released = new LinkedList<>();
+  private ChunkBuffer currentBuffer = null;
+  private final Lock lock = new ReentrantLock();
+  private final Condition notFull = lock.newCondition();
+
 
   public static BufferPool empty() {
     return EMPTY;
@@ -61,8 +71,6 @@ public class BufferPool {
       Function<ByteBuffer, ByteString> byteStringConversion) {
     this.capacity = capacity;
     this.bufferSize = bufferSize;
-    bufferList = capacity == 0 ? emptyList() : new ArrayList<>(capacity);
-    currentBufferIndex = -1;
     this.byteStringConversion = byteStringConversion;
   }
 
@@ -70,81 +78,111 @@ public class BufferPool {
     return byteStringConversion;
   }
 
-  synchronized ChunkBuffer getCurrentBuffer() {
-    return currentBufferIndex == -1 ? null : bufferList.get(currentBufferIndex);
+  ChunkBuffer getCurrentBuffer() {
+    return doInLock(() -> currentBuffer);
   }
 
   /**
-   * If the currentBufferIndex is less than the buffer size - 1,
-   * it means, the next buffer in the list has been freed up for
-   * rewriting. Reuse the next available buffer in such cases.
-   * <p>
-   * In case, the currentBufferIndex == buffer.size and buffer size is still
-   * less than the capacity to be allocated, just allocate a buffer of size
-   * chunk size.
+   * Allocate a new {@link ChunkBuffer}, waiting for a buffer to be released when this pool already allocates at
+   * capacity.
    */
-  public synchronized ChunkBuffer allocateBuffer(int increment) {
-    final int nextBufferIndex = currentBufferIndex + 1;
+  public ChunkBuffer allocateBuffer(int increment) throws InterruptedException {
+    lock.lockInterruptibly();
+    try {
+      Preconditions.assertTrue(allocated.size() + released.size() <= capacity, () ->
+          "Total created buffer must not exceed capacity.");
 
-    Preconditions.assertTrue(nextBufferIndex < capacity, () ->
-        "next index: " + nextBufferIndex + " >= capacity: " + capacity);
+      while (allocated.size() == capacity) {
+        LOG.debug("Allocation needs to wait the pool is at capacity (allocated = capacity = {}).", capacity);
+        notFull.await();
+      }
+      // Get a buffer to allocate, preferably from the released ones.
+      final ChunkBuffer buffer = released.isEmpty() ?
+          ChunkBuffer.allocate(bufferSize, increment) : released.removeFirst();
+      allocated.add(buffer);
+      currentBuffer = buffer;
 
-    currentBufferIndex = nextBufferIndex;
-
-    if (currentBufferIndex < bufferList.size()) {
-      return getBuffer(currentBufferIndex);
-    } else {
-      final ChunkBuffer newBuffer = ChunkBuffer.allocate(bufferSize, increment);
-      bufferList.add(newBuffer);
-      return newBuffer;
+      LOG.debug("Allocated new buffer {}, number of used buffers {}, capacity {}.",
+          buffer, allocated.size(), capacity);
+      return buffer;
+    } finally {
+      lock.unlock();
     }
   }
 
-  synchronized void releaseBuffer(ChunkBuffer chunkBuffer) {
-    int releasedIndex = bufferList.indexOf(chunkBuffer);
-    Preconditions.assertTrue(!bufferList.isEmpty(), "empty buffer list");
-    Preconditions.assertTrue(releasedIndex <= currentBufferIndex);
-    Preconditions.assertTrue(currentBufferIndex >= 0, () -> "current buffer: " + currentBufferIndex);
-
-    // always remove from head of the list and append at last
-    final ChunkBuffer buffer = bufferList.remove(releasedIndex);
-    buffer.clear();
-    bufferList.add(buffer);
-    currentBufferIndex--;
+  void releaseBuffer(ChunkBuffer buffer) {
+    LOG.debug("Releasing buffer {}", buffer);
+    lock.lock();
+    try {
+      Preconditions.assertTrue(allocated.remove(buffer), "Releasing unknown buffer");
+      buffer.clear();
+      released.add(buffer);
+      if (buffer == currentBuffer) {
+        currentBuffer = null;
+      }
+      notFull.signal();
+    } finally {
+      lock.unlock();
+    }
   }
 
-  public synchronized void clearBufferPool() {
-    bufferList.forEach(ChunkBuffer::close);
-    bufferList.clear();
-    currentBufferIndex = -1;
+  /**
+   * Wait until one buffer is available.
+   * @throws InterruptedException
+   */
+  public void waitUntilAvailable() throws InterruptedException {
+    lock.lockInterruptibly();
+    try {
+      while (allocated.size() == capacity) {
+        notFull.await();
+      }
+    } finally {
+      lock.unlock();
+    }
   }
 
-  public void checkBufferPoolEmpty() {
-    Preconditions.assertSame(0, computeBufferData(), "total buffer size");
+  public void clearBufferPool() {
+    lock.lock();
+    try {
+      allocated.forEach(ChunkBuffer::close);
+      released.forEach(ChunkBuffer::close);
+      allocated.clear();
+      released.clear();
+      currentBuffer = null;
+    } finally {
+      lock.unlock();
+    }
   }
 
   public long computeBufferData() {
-    long totalBufferSize = 0;
-    for (ChunkBuffer buf : bufferList) {
-      totalBufferSize += buf.position();
-    }
-    return totalBufferSize;
+    return doInLock(() -> {
+      long totalBufferSize = 0;
+      for (ChunkBuffer buf : allocated) {
+        totalBufferSize += buf.position();
+      }
+      return totalBufferSize;
+    });
   }
 
   public int getSize() {
-    return bufferList.size();
+    return doInLock(() -> allocated.size() + released.size());
   }
 
-  public ChunkBuffer getBuffer(int index) {
-    return bufferList.get(index);
-  }
-
-  int getCurrentBufferIndex() {
-    return currentBufferIndex;
+  public List<ChunkBuffer> getAllocatedBuffers() {
+    return doInLock(() -> new ArrayList<>(allocated));
   }
 
   public int getNumberOfUsedBuffers() {
-    return currentBufferIndex + 1;
+    return doInLock(allocated::size);
+  }
+
+  private <T> T doInLock(Supplier<T> supplier) {
+    lock.lock();
+    try {
+      return supplier.get();
+    } finally {
+      lock.unlock();
+    }
   }
 
   public int getCapacity() {
@@ -154,4 +192,5 @@ public class BufferPool {
   public int getBufferSize() {
     return bufferSize;
   }
+
 }

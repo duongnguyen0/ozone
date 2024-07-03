@@ -64,15 +64,7 @@ class CommitWatcher extends AbstractCommitWatcher<ChunkBuffer> {
     //  The flush future should be handled by BlockOutputStream and use the flushIndex which is a result of
     //  executePutBlock.
 
-   // final long totalLength = addAckDataLength(acked);
-    // When putBlock is called, a future is added.
-    // When putBlock is replied, the future is removed below.
-    // Therefore, the removed future should not be null.
-    //
-    // final CompletableFuture<ContainerCommandResponseProto> removed =
-    //     futureMap.remove(totalLength);
-    // Objects.requireNonNull(removed, () -> "Future not found for "
-    //     + totalLength + ": existing = " + futureMap.keySet());
+    addAckDataLength(acked);
   }
 
   @VisibleForTesting

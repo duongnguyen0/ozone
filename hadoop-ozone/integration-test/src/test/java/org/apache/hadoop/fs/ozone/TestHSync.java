@@ -45,6 +45,7 @@ import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileAlreadyExistsException;
 import org.apache.hadoop.hdds.conf.StorageUnit;
 import org.apache.hadoop.hdds.scm.storage.BlockOutputStream;
+import org.apache.hadoop.hdds.scm.storage.BufferPool;
 import org.apache.hadoop.hdds.utils.IOUtils;
 import org.apache.hadoop.hdds.client.DefaultReplicationConfig;
 import org.apache.hadoop.hdds.client.ECReplicationConfig;
@@ -209,6 +210,8 @@ public class TestHSync {
     GenericTestUtils.setLogLevel(BlockOutputStream.LOG, Level.DEBUG);
     GenericTestUtils.setLogLevel(BlockInputStream.LOG, Level.DEBUG);
     GenericTestUtils.setLogLevel(KeyValueHandler.LOG, Level.DEBUG);
+
+    GenericTestUtils.setLogLevel(BufferPool.LOG, Level.DEBUG);
 
     openKeyCleanupService =
         (OpenKeyCleanupService) cluster.getOzoneManager().getKeyManager().getOpenKeyCleanupService();
@@ -722,20 +725,17 @@ public class TestHSync {
   }
 
   public static Stream<Arguments> concurrentWriteHSync() {
-    // We're testing with flush-size = 3 chunk-size, and max-flush-size=6.
-    // Total chunk buffers that writer can occupied is 4 (3 inflight for flush and 1 to accommodate current writes).
-    // so, 2 chunk buffers left for sync threads to use. This mean tests with more than 2 sync threads may fail now.
-    // After HDDS-11073, this will no longer be a problem.
     return Stream.of(
         Arguments.of(1, 1),
         Arguments.of(2, 1),
         Arguments.of(4, 1),
         Arguments.of(6, 2),
         Arguments.of(8, 2),
-        // this may fail.
         Arguments.of(8, 3),
         // this may fail.
-        Arguments.of(8, 4)
+        Arguments.of(8, 4),
+        Arguments.of(8, 8),
+        Arguments.of(8, 16)
     );
   }
 
