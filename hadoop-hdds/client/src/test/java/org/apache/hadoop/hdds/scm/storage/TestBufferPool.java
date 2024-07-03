@@ -34,7 +34,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -191,7 +190,7 @@ class TestBufferPool {
     boolean pickFirst = false;
     for (int i = capacity - 1; i >= 0; i--) {
       final ChunkBuffer released = pickFirst ? buffers.removeFirst() : buffers.removeLast();
-      pickFirst = ! pickFirst;
+      pickFirst = !pickFirst;
       pool.releaseBuffer(released);
       assertEquals(i, pool.getNumberOfUsedBuffers());
       assertThrows(IllegalStateException.class,

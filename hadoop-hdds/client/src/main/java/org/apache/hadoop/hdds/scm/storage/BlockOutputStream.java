@@ -364,8 +364,8 @@ public class BlockOutputStream extends OutputStream {
       try {
         currentBuffer = bufferPool.allocateBuffer(config.getBufferIncrement());
         currentBufferRemaining = currentBuffer.remaining();
-        LOG.debug("Allocated new buffer {}, used = {}, capacity = {}", currentBuffer, bufferPool.getNumberOfUsedBuffers(),
-            bufferPool.getCapacity());
+        LOG.debug("Allocated new buffer {}, used = {}, capacity = {}", currentBuffer,
+            bufferPool.getNumberOfUsedBuffers(), bufferPool.getCapacity());
       } catch (InterruptedException e) {
         handleInterruptedException(e, false);
       }
