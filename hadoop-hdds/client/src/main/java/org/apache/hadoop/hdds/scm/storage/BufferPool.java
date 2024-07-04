@@ -114,7 +114,7 @@ public class BufferPool {
     LOG.debug("Releasing buffer {}", buffer);
     lock.lock();
     try {
-      Preconditions.assertTrue(allocated.remove(buffer), "Releasing unknown buffer");
+      Preconditions.assertTrue(removeByIdentity(allocated, buffer), "Releasing unknown buffer");
       buffer.clear();
       released.add(buffer);
       if (buffer == currentBuffer) {
@@ -124,6 +124,26 @@ public class BufferPool {
     } finally {
       lock.unlock();
     }
+  }
+
+  /**
+   * Remove an item from a list by identity.
+   * @return true if the item is found and removed from the list, otherwise false.
+   */
+  private static <T> boolean removeByIdentity(List<T> list, T toRemove) {
+    int i = 0;
+    for (T item : list) {
+      if (item == toRemove) {
+        break;
+      } else {
+        i++;
+      }
+    }
+    if (i < list.size()) {
+      list.remove(i);
+      return true;
+    }
+    return false;
   }
 
   /**
