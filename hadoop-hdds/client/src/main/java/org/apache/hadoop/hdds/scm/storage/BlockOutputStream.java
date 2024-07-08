@@ -303,8 +303,8 @@ public class BlockOutputStream extends OutputStream {
       allocateNewBufferIfNeeded();
       currentBuffer.put((byte) b);
       currentBufferRemaining--;
+      updateWrittenDataLength(1);
       writeChunkIfNeeded();
-      writtenDataLength++;
       doFlushOrWatchIfNeeded();
     }
   }
