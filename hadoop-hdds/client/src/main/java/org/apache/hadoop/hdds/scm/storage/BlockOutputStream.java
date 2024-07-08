@@ -711,6 +711,8 @@ public class BlockOutputStream extends OutputStream {
       } catch (ExecutionException ex) {
         if (ex.getCause() instanceof FlushRuntimeException) {
           throw ((FlushRuntimeException) ex.getCause()).cause;
+        } else {
+          throw ex;
         }
       }
     }
