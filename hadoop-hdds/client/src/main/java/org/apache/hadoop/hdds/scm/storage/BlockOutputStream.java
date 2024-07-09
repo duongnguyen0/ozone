@@ -253,7 +253,7 @@ public class BlockOutputStream extends OutputStream {
     return 0;
   }
 
-  public long getWrittenDataLength() {
+  public synchronized long getWrittenDataLength() {
     return writtenDataLength;
   }
 
