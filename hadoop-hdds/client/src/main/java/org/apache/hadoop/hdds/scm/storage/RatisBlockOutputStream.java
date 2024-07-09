@@ -118,17 +118,11 @@ public class RatisBlockOutputStream extends BlockOutputStream
   }
 
   @Override
-  void putFlushFuture(long flushPos, CompletableFuture<ContainerCommandResponseProto> flushFuture) {
-    commitWatcher.putFlushFuture(flushPos, flushFuture);
-  }
-
-  @Override
-  void waitOnFlushFutures() throws InterruptedException, ExecutionException {
+  void waitOnFlushFuture() throws InterruptedException, ExecutionException {
     CompletableFuture<Void> flushFuture = getLastFlushFuture();
     if (flushFuture != null) {
       flushFuture.get();
     }
-    commitWatcher.waitOnFlushFutures();
   }
 
   @Override

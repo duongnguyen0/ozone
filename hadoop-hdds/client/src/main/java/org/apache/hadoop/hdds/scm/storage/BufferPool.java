@@ -205,6 +205,10 @@ public class BufferPool {
     }
   }
 
+  public boolean isAtCapacity() {
+    return getNumberOfUsedBuffers() == capacity;
+  }
+
   public int getCapacity() {
     return capacity;
   }

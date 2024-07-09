@@ -24,15 +24,8 @@
  */
 package org.apache.hadoop.hdds.scm.storage;
 
-import com.google.common.annotations.VisibleForTesting;
-import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos.ContainerCommandResponseProto;
 import org.apache.hadoop.hdds.scm.XceiverClientSpi;
 import org.apache.hadoop.ozone.common.ChunkBuffer;
-
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutionException;
 
 /**
  * This class executes watchForCommit on ratis pipeline and releases
@@ -41,10 +34,6 @@ import java.util.concurrent.ExecutionException;
 class CommitWatcher extends AbstractCommitWatcher<ChunkBuffer> {
   // A reference to the pool of buffers holding the data
   private final BufferPool bufferPool;
-
-  // future Map to hold up all putBlock futures
-  private final ConcurrentMap<Long, CompletableFuture<ContainerCommandResponseProto>>
-      futureMap = new ConcurrentHashMap<>();
 
   CommitWatcher(BufferPool bufferPool, XceiverClientSpi xceiverClient) {
     super(xceiverClient);
@@ -67,27 +56,8 @@ class CommitWatcher extends AbstractCommitWatcher<ChunkBuffer> {
     addAckDataLength(acked);
   }
 
-  @VisibleForTesting
-  ConcurrentMap<Long, CompletableFuture<ContainerCommandResponseProto>> getFutureMap() {
-    return futureMap;
-  }
-
-  public void putFlushFuture(long flushPos, CompletableFuture<ContainerCommandResponseProto> flushFuture) {
-    futureMap.compute(flushPos,
-        (key, previous) -> previous == null ? flushFuture :
-            previous.thenCombine(flushFuture, (prev, curr) -> curr));
-  }
-
-
-  public void waitOnFlushFutures() throws InterruptedException, ExecutionException {
-    // wait for all the transactions to complete
-    CompletableFuture.allOf(futureMap.values().toArray(
-        new CompletableFuture[0])).get();
-  }
-
   @Override
   public void cleanup() {
     super.cleanup();
-    futureMap.clear();
   }
 }

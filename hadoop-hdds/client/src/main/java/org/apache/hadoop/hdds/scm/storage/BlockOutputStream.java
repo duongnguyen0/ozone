@@ -356,6 +356,10 @@ public class BlockOutputStream extends OutputStream {
         CompletableFuture<PutBlockResult> putBlockFuture = executePutBlock(false, false);
         this.lastFlushFuture = watchForCommitAsync(putBlockFuture);
       }
+
+      if (bufferPool.isAtCapacity()) {
+        handleFullBuffer();
+      }
     }
   }
 
@@ -395,32 +399,35 @@ public class BlockOutputStream extends OutputStream {
     if (LOG.isDebugEnabled()) {
       LOG.debug("Retrying write length {} for blockID {}", len, blockID);
     }
-    Preconditions.checkArgument(len <= streamBufferArgs.getStreamBufferMaxSize());
-    int count = 0;
-    List<ChunkBuffer> allocatedBuffers = bufferPool.getAllocatedBuffers();
-    while (len > 0) {
-      ChunkBuffer buffer = allocatedBuffers.get(count);
-      long writeLen = Math.min(buffer.position(), len);
-      if (!buffer.hasRemaining()) {
-        writeChunk(buffer);
-      }
-      len -= writeLen;
-      count++;
-      writtenDataLength += writeLen;
-      // we should not call isBufferFull/shouldFlush here.
-      // The buffer might already be full as whole data is already cached in
-      // the buffer. We should just validate
-      // if we wrote data of size streamBufferMaxSize/streamBufferFlushSize to
-      // call for handling full buffer/flush buffer condition.
-      if (writtenDataLength % streamBufferArgs.getStreamBufferFlushSize() == 0) {
-        // reset the position to zero as now we will be reading the
-        // next buffer in the list
-        updateSyncedLength();
-        updateFlushedLength();
-        executePutBlock(false, false);
-      }
-      if (writtenDataLength == streamBufferArgs.getStreamBufferMaxSize()) {
-        handleFullBuffer();
+    synchronized (this) {
+      Preconditions.checkArgument(len <= streamBufferArgs.getStreamBufferMaxSize());
+      int count = 0;
+      List<ChunkBuffer> allocatedBuffers = bufferPool.getAllocatedBuffers();
+      while (len > 0) {
+        ChunkBuffer buffer = allocatedBuffers.get(count);
+        long writeLen = Math.min(buffer.position(), len);
+        if (!buffer.hasRemaining()) {
+          writeChunk(buffer);
+        }
+        len -= writeLen;
+        count++;
+        writtenDataLength += writeLen;
+        // we should not call isBufferFull/shouldFlush here.
+        // The buffer might already be full as whole data is already cached in
+        // the buffer. We should just validate
+        // if we wrote data of size streamBufferMaxSize/streamBufferFlushSize to
+        // call for handling full buffer/flush buffer condition.
+        if (writtenDataLength % streamBufferArgs.getStreamBufferFlushSize() == 0) {
+          // reset the position to zero as now we will be reading the
+          // next buffer in the list
+          updateSyncedLength();
+          updateFlushedLength();
+          CompletableFuture<PutBlockResult> putBlockResultFuture = executePutBlock(false, false);
+          lastFlushFuture = watchForCommitAsync(putBlockResultFuture);
+        }
+        if (writtenDataLength == streamBufferArgs.getStreamBufferMaxSize()) {
+          handleFullBuffer();
+        }
       }
     }
   }
@@ -432,20 +439,15 @@ public class BlockOutputStream extends OutputStream {
    * @throws IOException
    */
   private void handleFullBuffer() throws IOException {
-    waitForFlushAndCommit(true);
-  }
-
-  void waitForFlushAndCommit(boolean bufferFull) throws IOException {
     try {
       checkOpen();
-      waitOnFlushFutures();
+      waitOnFlushFuture();
     } catch (ExecutionException e) {
       handleExecutionException(e);
     } catch (InterruptedException ex) {
       Thread.currentThread().interrupt();
       handleInterruptedException(ex, true);
     }
-    watchForCommit(bufferFull);
   }
 
   void releaseBuffersOnException() {
@@ -587,12 +589,7 @@ public class BlockOutputStream extends OutputStream {
       // never reach, just to make compiler happy.
       return null;
     }
-    putFlushFuture(flushPos, flushFuture);
     return flushFuture.thenApply(r -> new PutBlockResult(flushPos, asyncReply.getLogIndex(), r));
-  }
-
-  void putFlushFuture(long flushPos,
-      CompletableFuture<ContainerCommandResponseProto> flushFuture) {
   }
 
   @Override
@@ -744,7 +741,7 @@ public class BlockOutputStream extends OutputStream {
     }
   }
 
-  void waitOnFlushFutures() throws InterruptedException, ExecutionException {
+  void waitOnFlushFuture() throws InterruptedException, ExecutionException {
   }
 
   void validateResponse(
@@ -937,9 +934,6 @@ public class BlockOutputStream extends OutputStream {
       handleInterruptedException(ex, false);
       // never reach.
       return null;
-    }
-    if (putBlockPiggybacking) {
-      putFlushFuture(flushPos, validateFuture);
     }
     return validateFuture.thenApply(x -> new PutBlockResult(flushPos, asyncReply.getLogIndex(), x));
   }
