@@ -20,7 +20,6 @@ package org.apache.hadoop.hdds.scm.storage;
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.fs.Syncable;
 import org.apache.hadoop.hdds.client.BlockID;
-import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos.ContainerCommandResponseProto;
 import org.apache.hadoop.hdds.scm.ContainerClientMetrics;
 import org.apache.hadoop.hdds.scm.OzoneClientConfig;
 import org.apache.hadoop.hdds.scm.StreamBufferArgs;
@@ -99,12 +98,6 @@ public class RatisBlockOutputStream extends BlockOutputStream
   @Override
   void releaseBuffersOnException() {
     commitWatcher.releaseBuffersOnException();
-  }
-
-  @Override
-  XceiverClientReply sendWatchForCommit(boolean bufferFull) throws IOException {
-    return bufferFull ? commitWatcher.watchOnFirstIndex()
-        : commitWatcher.watchOnLastIndex();
   }
 
   @Override

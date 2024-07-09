@@ -461,45 +461,12 @@ public class BlockOutputStream extends OutputStream {
     refreshCurrentBuffer();
   }
 
-  XceiverClientReply sendWatchForCommit(boolean bufferFull)
-      throws IOException {
-    return null;
-  }
-
   /**
    * Watch for a specific commit index.
    */
   XceiverClientReply sendWatchForCommit(long commitIndex)
       throws IOException {
     return null;
-  }
-
-  /**
-   * calls watchForCommit API of the Ratis Client. For Standalone client,
-   * it is a no op.
-   * @param bufferFull flag indicating whether bufferFull condition is hit or
-   *              its called as part flush/close
-   * @throws IOException IOException in case watch gets timed out
-   */
-  private void watchForCommit(boolean bufferFull) throws IOException {
-    checkOpen();
-    try {
-      final XceiverClientReply reply = sendWatchForCommit(bufferFull);
-      if (reply != null) {
-        List<DatanodeDetails> dnList = reply.getDatanodes();
-        if (!dnList.isEmpty()) {
-          Pipeline pipe = xceiverClient.getPipeline();
-
-          LOG.warn("Failed to commit BlockId {} on {}. Failed nodes: {}",
-              blockID, pipe, dnList);
-          failedServers.addAll(dnList);
-        }
-      }
-    } catch (IOException ioe) {
-      setIoException(ioe);
-      throw getIoException();
-    }
-    refreshCurrentBuffer();
   }
 
   private void watchForCommit(long commitIndex) throws IOException {
