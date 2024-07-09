@@ -87,7 +87,7 @@ public class ECBlockOutputStream extends BlockOutputStream {
   }
 
   @Override
-  public void write(byte[] b, int off, int len) throws IOException {
+  public synchronized void write(byte[] b, int off, int len) throws IOException {
     this.currentChunkRspFuture =
         writeChunkToContainer(
             ChunkBuffer.wrap(ByteBuffer.wrap(b, off, len)));
