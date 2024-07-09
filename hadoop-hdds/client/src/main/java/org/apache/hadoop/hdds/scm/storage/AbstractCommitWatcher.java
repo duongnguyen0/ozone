@@ -79,7 +79,7 @@ abstract class AbstractCommitWatcher<BUFFER> {
   }
 
   /** @return the total data which has been acknowledged. */
-  long getTotalAckDataLength() {
+  synchronized long getTotalAckDataLength() {
     return totalAckDataLength;
   }
 

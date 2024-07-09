@@ -564,10 +564,13 @@ public class BlockOutputStream extends OutputStream {
     if (xceiverClientFactory != null && xceiverClient != null
         && bufferPool != null && bufferPool.getSize() > 0
         && (!streamBufferArgs.isStreamBufferFlushDelay() ||
-            writtenDataLength - totalFlushedDataLength
-                >= streamBufferArgs.getStreamBufferSize())) {
+            unflushedLength() >= streamBufferArgs.getStreamBufferSize())) {
       handleFlush(false);
     }
+  }
+
+  private synchronized long unflushedLength() {
+    return writtenDataLength - totalFlushedDataLength;
   }
 
   private void writeChunkCommon(ChunkBuffer buffer)
