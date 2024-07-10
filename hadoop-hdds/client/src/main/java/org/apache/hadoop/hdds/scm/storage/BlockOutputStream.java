@@ -345,7 +345,7 @@ public class BlockOutputStream extends OutputStream {
     }
   }
 
-  public void updateWrittenDataLength(int writeLen) {
+  public synchronized void updateWrittenDataLength(int writeLen) {
     writtenDataLength += writeLen;
   }
 
