@@ -31,6 +31,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
@@ -58,6 +59,9 @@ import org.apache.ratis.grpc.GrpcTlsConfig;
 import org.apache.ratis.proto.RaftProtos;
 import org.apache.ratis.proto.RaftProtos.CommitInfoProto;
 import org.apache.ratis.proto.RaftProtos.ReplicationLevel;
+import org.apache.ratis.protocol.Message;
+import org.apache.ratis.protocol.RaftGroupId;
+import org.apache.ratis.protocol.RaftPeerId;
 import org.apache.ratis.protocol.exceptions.GroupMismatchException;
 import org.apache.ratis.protocol.exceptions.NotReplicatedException;
 import org.apache.ratis.protocol.exceptions.RaftException;
@@ -247,8 +251,34 @@ public final class XceiverClientRatis extends XceiverClientSpi {
     return commitInfoMap;
   }
 
+  static volatile boolean errorInjection = false;
+  static AtomicInteger errors = new AtomicInteger();
+
+  public static void enableErrorInjection(int errorCount) {
+    XceiverClientRatis.errorInjection = true;
+    errors.set(errorCount);
+  }
+
   private CompletableFuture<RaftClientReply> sendRequestAsync(
       ContainerCommandRequestProto request) {
+    if (errorInjection) {
+      int errorNum = errors.decrementAndGet();
+      if (errorNum >= 0) {
+        ContainerCommandResponseProto proto = ContainerCommandResponseProto.newBuilder()
+            .setResult(ContainerProtos.Result.CLOSED_CONTAINER_IO)
+            .setMessage("Simulated error #" + errorNum)
+            .setCmdType(request.getCmdType())
+            .build();
+        RaftClientReply reply = RaftClientReply.newBuilder()
+            .setSuccess(true)
+            .setMessage(Message.valueOf(proto.toByteString()))
+            .setClientId(getClient().getId())
+            .setServerId(RaftPeerId.getRaftPeerId(this.pipeline.getLeaderId().toString()))
+            .setGroupId(RaftGroupId.randomId())
+            .build();
+        return CompletableFuture.completedFuture(reply);
+      }
+    }
     return TracingUtil.executeInNewSpan(
         "XceiverClientRatis." + request.getCmdType().name(),
         () -> {

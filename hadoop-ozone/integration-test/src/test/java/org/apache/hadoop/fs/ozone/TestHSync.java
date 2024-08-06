@@ -44,6 +44,7 @@ import org.apache.hadoop.crypto.Encryptor;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileAlreadyExistsException;
 import org.apache.hadoop.hdds.conf.StorageUnit;
+import org.apache.hadoop.hdds.scm.XceiverClientRatis;
 import org.apache.hadoop.hdds.scm.storage.BlockOutputStream;
 import org.apache.hadoop.hdds.scm.storage.BufferPool;
 import org.apache.hadoop.hdds.utils.IOUtils;
@@ -665,6 +666,85 @@ public class TestHSync {
         return false;
       }
     }, 500, 3000);
+  }
+
+  @Test
+  public void testConcurrentHysncExceptionHandling() throws Exception {
+    final String rootPath = String.format("%s://%s/", OZONE_OFS_URI_SCHEME, CONF.get(OZONE_OM_ADDRESS_KEY));
+    CONF.set(CommonConfigurationKeysPublic.FS_DEFAULT_NAME_KEY, rootPath);
+
+    final String dir = OZONE_ROOT + bucket.getVolumeName() + OZONE_URI_DELIMITER + bucket.getName();
+
+    try (FileSystem fs = FileSystem.get(CONF)) {
+      final Path file = new Path(dir, "exceptionhandling");
+      byte[] data = new byte[8];
+      ThreadLocalRandom.current().nextBytes(data);
+      int writes;
+      try (FSDataOutputStream out = fs.create(file, true)) {
+        writes = runConcurrentWriteHSyncWithException(file, out, data, 4);
+      }
+      validateWrittenFile(file, fs, data, writes);
+      fs.delete(file, false);
+    }
+  }
+
+  private int runConcurrentWriteHSyncWithException(Path file,
+      final FSDataOutputStream out, byte[] data, int syncThreadsCount) throws Exception {
+
+    AtomicReference<Exception> writerException = new AtomicReference<>();
+    AtomicReference<Exception> syncerException = new AtomicReference<>();
+
+    LOG.info("runConcurrentWriteHSyncWithException {} with size {}", file, data.length);
+    AtomicInteger writes = new AtomicInteger();
+    final long start = Time.monotonicNow();
+
+    Runnable syncer = () -> {
+      while ((Time.monotonicNow() - start < 10000)) {
+        try {
+          out.write(data);
+          writes.incrementAndGet();
+          out.hsync();
+        } catch (Exception e) {
+          LOG.error("Error calling hsync", e);
+          syncerException.compareAndSet(null, e);
+          throw new RuntimeException(e);
+        }
+      }
+    };
+
+    Thread[] syncThreads = new Thread[syncThreadsCount];
+    for (int i = 0; i < syncThreadsCount; i++) {
+      syncThreads[i] = new Thread(syncer);
+      syncThreads[i].setName("Syncer-" + i);
+      syncThreads[i].start();
+    }
+
+    // Inject error at 3rd second.
+    Runnable errorInjector = () -> {
+      while ((Time.monotonicNow() - start <= 3000)) {
+        try {
+          Thread.sleep(10);
+        } catch (InterruptedException e) {
+          throw new RuntimeException(e);
+        }
+      }
+      XceiverClientRatis.enableErrorInjection(1);
+      LOG.info("Enabled error injection in XceiverClientRatis");
+    };
+
+    new Thread(errorInjector).start();
+
+    for (Thread sync : syncThreads) {
+      sync.join();
+    }
+
+    if (syncerException.get() != null) {
+      throw syncerException.get();
+    }
+    if (writerException.get() != null) {
+      throw writerException.get();
+    }
+    return writes.get();
   }
 
   private int runConcurrentWriteHSync(Path file,
