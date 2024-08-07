@@ -699,7 +699,8 @@ public class TestHSync {
   }
 
   private int runConcurrentWriteHSyncWithException(Path file,
-      final FSDataOutputStream out, byte[] data, int syncThreadsCount, ErrorInjectorImpl errorInjector) throws Exception {
+      final FSDataOutputStream out, byte[] data, int syncThreadsCount,
+      ErrorInjectorImpl errorInjector) throws Exception {
 
     AtomicReference<Exception> writerException = new AtomicReference<>();
     AtomicReference<Exception> syncerException = new AtomicReference<>();
@@ -738,7 +739,7 @@ public class TestHSync {
           throw new RuntimeException(e);
         }
       }
-      errorInjector.start(1);
+      errorInjector.start(8);
       LOG.info("Enabled error injection in XceiverClientRatis");
     };
 
@@ -1381,7 +1382,7 @@ public class TestHSync {
   }
 
   private static class ErrorInjectorImpl implements ErrorInjector {
-    final AtomicInteger remaining = new AtomicInteger();
+    private final AtomicInteger remaining = new AtomicInteger();
     void start(int count) {
       remaining.set(count);
     }
