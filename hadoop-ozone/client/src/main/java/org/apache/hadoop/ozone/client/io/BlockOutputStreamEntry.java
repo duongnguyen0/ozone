@@ -102,6 +102,7 @@ public class BlockOutputStreamEntry extends OutputStream {
     this.clientMetrics = b.clientMetrics;
     this.streamBufferArgs = b.streamBufferArgs;
     this.executorServiceSupplier = b.executorServiceSupplier;
+    this.isHandlingRetry = b.forRetry;
   }
 
   @Override
