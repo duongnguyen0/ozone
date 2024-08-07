@@ -739,7 +739,7 @@ public class TestHSync {
           throw new RuntimeException(e);
         }
       }
-      errorInjector.start(8);
+      errorInjector.start(4);
       LOG.info("Enabled error injection in XceiverClientRatis");
     };
 
