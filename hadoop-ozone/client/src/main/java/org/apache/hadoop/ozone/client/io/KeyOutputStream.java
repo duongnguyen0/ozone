@@ -259,6 +259,10 @@ public class KeyOutputStream extends OutputStream
         current.write(b, off, writeLen);
         offset += writeLen;
       }
+      current.oncallFinished();
+    } catch (InterruptedException e) {
+      current.oncallFinished();
+      throw new InterruptedIOException();
     } catch (IOException ioe) {
       // for the current iteration, totalDataWritten - currentPos gives the
       // amount of data already written to the buffer
