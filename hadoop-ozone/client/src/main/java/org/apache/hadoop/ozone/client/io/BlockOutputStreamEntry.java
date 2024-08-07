@@ -22,6 +22,10 @@ import java.io.OutputStream;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
 import org.apache.hadoop.fs.Syncable;
@@ -41,6 +45,8 @@ import org.apache.hadoop.util.MetricUtil;
 
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.ratis.util.JavaUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * A BlockOutputStreamEntry manages the data writes into the DataNodes.
@@ -51,7 +57,7 @@ import org.apache.ratis.util.JavaUtils;
  * but there can be other implementations that are using a different way.
  */
 public class BlockOutputStreamEntry extends OutputStream {
-
+  public static final Logger LOG = LoggerFactory.getLogger(BlockOutputStreamEntry.class);
   private final OzoneClientConfig config;
   private OutputStream outputStream;
   private BlockID blockID;
@@ -68,6 +74,19 @@ public class BlockOutputStreamEntry extends OutputStream {
   private final ContainerClientMetrics clientMetrics;
   private final StreamBufferArgs streamBufferArgs;
   private final Supplier<ExecutorService> executorServiceSupplier;
+
+  /**
+   * An indicator that this BlockOutputStream is created to handoff writes from another faulty BlockOutputStream.
+   * Once this flag is on, this BlockOutputStream can only handle writeOneRetry.
+   */
+  private volatile boolean isHandlingRetry;
+  private final Lock handlingRetryLock = new ReentrantLock();
+  private final Condition handlingRetryCondition = handlingRetryLock.newCondition();
+  /**
+   * To record how many calls(write, flush) are being handled by this block.
+   */
+  private AtomicInteger inflightCalls = new AtomicInteger();
+
 
   BlockOutputStreamEntry(Builder b) {
     this.config = b.config;
@@ -99,6 +118,38 @@ public class BlockOutputStreamEntry extends OutputStream {
   void checkStream() throws IOException {
     if (!isInitialized()) {
       createOutputStream();
+    }
+  }
+
+  void onCallReceived() {
+    inflightCalls.incrementAndGet();
+  }
+
+  boolean oncallFinished() {
+    return inflightCalls.decrementAndGet() == 0;
+  }
+
+  void waitForRetryHandling() throws InterruptedException {
+    handlingRetryLock.lock();
+    try {
+      while (isHandlingRetry) {
+        LOG.info("{} : Block to wait for retry handling.", this);
+        handlingRetryCondition.await();
+        LOG.info("{} : Done waiting for retry handling.", this);
+      }
+    } finally {
+      handlingRetryLock.unlock();
+    }
+  }
+
+  void finishRetryHandling() {
+    LOG.info("{}: Exiting retry handling mode", this);
+    handlingRetryLock.lock();
+    try {
+      isHandlingRetry = false;
+      handlingRetryCondition.signalAll();
+    } finally {
+      handlingRetryLock.unlock();
     }
   }
 
@@ -368,6 +419,7 @@ public class BlockOutputStreamEntry extends OutputStream {
     private ContainerClientMetrics clientMetrics;
     private StreamBufferArgs streamBufferArgs;
     private Supplier<ExecutorService> executorServiceSupplier;
+    private boolean forRetry;
 
     public Pipeline getPipeline() {
       return pipeline;
@@ -430,6 +482,11 @@ public class BlockOutputStreamEntry extends OutputStream {
 
     public Builder setExecutorServiceSupplier(Supplier<ExecutorService> executorServiceSupplier) {
       this.executorServiceSupplier = executorServiceSupplier;
+      return this;
+    }
+
+    public Builder setForRetry(boolean forRetry) {
+      this.forRetry = forRetry;
       return this;
     }
 
